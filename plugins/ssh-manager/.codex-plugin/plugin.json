@@ -1,0 +1,36 @@
+{
+  "name": "ssh-manager",
+  "version": "0.1.2",
+  "description": "用于 Codex 的本地 SSH 服务器与部署管理插件，只读默认执行，支持可选会话免确认。",
+  "author": {
+    "name": "本地开发者"
+  },
+  "license": "MIT",
+  "keywords": [
+    "SSH",
+    "服务器",
+    "部署",
+    "凭据",
+    "Codex 插件"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "SSH 管理",
+    "shortDescription": "只读默认执行，敏感操作可确认，也可一键开启会话免确认",
+    "longDescription": "在 Codex 中管理本地 SSH 服务器配置。插件会加密保存服务器、账户和密码，只读命令默认直接执行；敏感操作默认确认，确认表单提供“确认本次执行”和“确认并开启本次会话免询问”两个选项。无论是否免确认，每次操作前都会先用一句简短中文说明将要执行的内容，并提供本机实时操作面板查看详细命令、路径、退出码和输出；面板支持多会话自由切换和持续连接的交互式 SSH 终端。",
+    "developerName": "本地开发者",
+    "category": "开发工具",
+    "capabilities": [
+      "Read",
+      "Write",
+      "Interactive"
+    ],
+    "defaultPrompt": [
+      "列出我的 SSH 服务器",
+      "安全添加一个 SSH 服务器",
+      "把当前项目部署到已保存的生产服务器"
+    ],
+    "brandColor": "#0F766E"
+  }
+}

@@ -1,0 +1,408 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import readline from "node:readline";
+
+const testDir = path.dirname(fileURLToPath(import.meta.url));
+const pluginRoot = path.resolve(testDir, "..");
+const serverPath = path.join(pluginRoot, "mcp", "server.mjs");
+const tempRoot = path.join(pluginRoot, ".test-rpc");
+const vaultHome = path.join(tempRoot, "vault");
+const fakeSsh = path.join(tempRoot, "fake-ssh.mjs");
+const fakeScp = path.join(tempRoot, "fake-scp.mjs");
+const callLog = path.join(tempRoot, "calls.log");
+
+function resetTemp() {
+  fs.rmSync(tempRoot, { recursive: true, force: true });
+  fs.mkdirSync(tempRoot, { recursive: true });
+}
+
+function createFakeBinaries() {
+  const sshSource = `import fs from "node:fs";
+import readline from "node:readline";
+const args = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(callLog)}, "ssh " + args.join(" ") + "\\n");
+if (args.includes("-tt")) {
+  process.stdout.write("FAKE_INTERACTIVE_READY\\n");
+  const rl = readline.createInterface({input: process.stdin});
+  rl.on("line", (line) => {
+    process.stdout.write("FAKE_ECHO:" + line + "\\n");
+    if (line === "exit") process.exit(0);
+  });
+} else {
+  process.stdout.write("FAKE_SSH " + args.join(" ") + "\\n");
+}
+`;
+  const scpSource = `import fs from "node:fs";\nconst line = "scp " + process.argv.slice(2).join(" ") + "\\n";\nfs.appendFileSync(${JSON.stringify(callLog)}, line);\nprocess.stdout.write("FAKE_SCP " + process.argv.slice(2).join(" ") + "\\n");\n`;
+  fs.writeFileSync(fakeSsh, sshSource, "utf8");
+  fs.writeFileSync(fakeScp, scpSource, "utf8");
+}
+
+// Codex 确认表单只接受受限 JSON Schema 子集。若混入数组、writeOnly、format:"password" 等
+// 不受支持的字段，整个 elicitation 请求会被客户端拒绝，所有需要确认的操作都会失败。
+const ALLOWED_ELICITATION_KEYS = {
+  boolean: new Set(["type", "title", "description", "default"]),
+  string: new Set(["type", "title", "description", "minLength", "maxLength", "format", "default", "enum", "enumNames", "oneOf"]),
+  number: new Set(["type", "title", "description", "minimum", "maximum", "default"]),
+  integer: new Set(["type", "title", "description", "minimum", "maximum", "default"]),
+};
+const ALLOWED_ELICITATION_FORMATS = new Set(["email", "uri", "date", "date-time"]);
+
+// 确认表单的 message 是渲染在选项上方的文本，Codex 按内容换行后按需撑高面板。
+// message 过长会把选项挤出可视区域（"选项被遮挡"），因此这里锁死预算防止回归。
+const APPROVAL_MESSAGE_HEAD_ROWS = 9;
+const APPROVAL_MESSAGE_TAIL_ROWS = 3;
+const APPROVAL_MESSAGE_MAX_ROWS = APPROVAL_MESSAGE_HEAD_ROWS + APPROVAL_MESSAGE_TAIL_ROWS + 1;
+const APPROVAL_MESSAGE_MAX_CHARS = 2400;
+
+function collectApprovalMessageViolations(params) {
+  const violations = [];
+  if (!params?.requestedSchema?.properties?.decision) return violations;
+  const message = typeof params.message === 'string' ? params.message : '';
+  const lines = message.split('\n');
+  if (lines.length > APPROVAL_MESSAGE_MAX_ROWS) {
+    violations.push('message 行数 ' + lines.length + ' 超过 ' + APPROVAL_MESSAGE_MAX_ROWS);
+  }
+  if (message.length > APPROVAL_MESSAGE_MAX_CHARS) {
+    violations.push('message 字符数 ' + message.length + ' 超过 ' + APPROVAL_MESSAGE_MAX_CHARS);
+  }
+  return violations;
+}
+
+function collectElicitationSchemaViolations(params) {
+  const violations = [];
+  const schema = params?.requestedSchema;
+  if (schema?.type !== "object") return ["requestedSchema.type 必须是 object"];
+  for (const [field, property] of Object.entries(schema.properties ?? {})) {
+    const allowed = ALLOWED_ELICITATION_KEYS[property.type];
+    if (!allowed) {
+      violations.push(field + ": 不支持的类型 " + property.type);
+      continue;
+    }
+    for (const key of Object.keys(property)) {
+      if (!allowed.has(key)) violations.push(field + ": 不支持的关键字 " + key);
+    }
+    if (property.format !== undefined && !ALLOWED_ELICITATION_FORMATS.has(property.format)) {
+      violations.push(field + ": 不支持的 format " + property.format);
+    }
+    if (property.oneOf !== undefined) {
+      if (!Array.isArray(property.oneOf) || property.oneOf.length === 0) {
+        violations.push(field + ": oneOf 必须是非空数组");
+        continue;
+      }
+      for (const option of property.oneOf) {
+        const keys = Object.keys(option ?? {});
+        if (!keys.every((key) => key === "const" || key === "title")) {
+          violations.push(field + ": oneOf 选项只允许 const 和 title");
+        }
+        if (typeof option?.const !== "string" || typeof option?.title !== "string") {
+          violations.push(field + ": oneOf 选项必须包含字符串 const 和 title");
+        }
+      }
+    }
+  }
+  return violations;
+}
+
+class RpcClient {
+  constructor(child) {
+    this.child = child;
+    this.nextId = 1;
+    this.pending = new Map();
+    this.onElicitation = async () => ({ action: "cancel" });
+    this.lines = readline.createInterface({ input: child.stdout, crlfDelay: Infinity });
+    this.lines.on("line", (line) => {
+      if (!line.trim()) return;
+      const message = JSON.parse(line);
+      if (message.method === "elicitation/create" && message.id !== undefined) {
+        void this.onElicitation(message.params).then((result) => {
+          child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: message.id, result })}\n`);
+        });
+        return;
+      }
+      if (message.id !== undefined && this.pending.has(message.id)) {
+        const pending = this.pending.get(message.id);
+        this.pending.delete(message.id);
+        if (message.error) pending.reject(new Error(message.error.message));
+        else pending.resolve(message.result);
+      }
+    });
+  }
+
+  call(method, params = {}) {
+    const id = this.nextId++;
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      this.child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
+    });
+  }
+
+  tool(name, args = {}) {
+    return this.call("tools/call", { name, arguments: args });
+  }
+
+  close() {
+    this.lines.close();
+    this.child.stdin.end();
+  }
+}
+
+async function waitForExit(child, timeoutMs = 5000) {
+  return Promise.race([
+    new Promise((resolve) => child.once("exit", resolve)),
+    new Promise((_, reject) => setTimeout(() => reject(new Error("server did not exit")), timeoutMs)),
+  ]);
+}
+
+async function main() {
+  resetTemp();
+  createFakeBinaries();
+  const env = {
+    ...process.env,
+    SSH_MANAGER_HOME: vaultHome,
+    SSH_MANAGER_SSH_BIN: fakeSsh,
+    SSH_MANAGER_SCP_BIN: fakeScp,
+  };
+  const child = spawn(process.execPath, [serverPath], {
+    cwd: pluginRoot,
+    env,
+    windowsHide: true,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  let stderr = "";
+  child.stderr.on("data", (chunk) => { stderr += String(chunk); });
+  const client = new RpcClient(child);
+
+  const init = await client.call("initialize", {
+    protocolVersion: "2025-11-25",
+    capabilities: {},
+    clientInfo: { name: "ssh-manager-smoke", version: "1.0.0" },
+  });
+  assert.equal(init.serverInfo.name, "Codex SSH 管理器");
+
+  const listed = await client.call("tools/list");
+  const toolNames = listed.tools.map((tool) => tool.name);
+  assert.ok(toolNames.includes("ssh_profile_upsert"));
+  assert.ok(toolNames.includes("ssh_deploy"));
+  assert.ok(toolNames.includes("ssh_exec"));
+  assert.ok(toolNames.includes("ssh_set_approval_mode"));
+  assert.ok(toolNames.includes("ssh_session_register"));
+  assert.ok(toolNames.includes("ssh_operation_dashboard"));
+  assert.ok(toolNames.includes("ssh_terminal_open"));
+  assert.ok(toolNames.includes("ssh_terminal_write"));
+  assert.ok(toolNames.includes("ssh_terminal_read"));
+  assert.ok(toolNames.includes("ssh_terminal_close"));
+
+  const session = await client.tool("ssh_session_register", { name: "测试会话" });
+  assert.equal(session._meta.status, "已注册");
+  assert.equal(session._meta.sessionName, "测试会话");
+
+  let elicitationCount = 0;
+  let approvalDecision = "confirm";
+  const elicitationSchemaViolations = [];
+  const approvalMessageViolations = [];
+  let lastApprovalMessage = "";
+  client.onElicitation = async (params) => {
+    elicitationCount += 1;
+    elicitationSchemaViolations.push(...collectElicitationSchemaViolations(params));
+    approvalMessageViolations.push(...collectApprovalMessageViolations(params));
+    lastApprovalMessage = typeof params.message === "string" ? params.message : "";
+    if (params.message.includes("新增 SSH 服务器配置")) {
+      return {
+        action: "accept",
+        content: {
+          approve: true,
+          alias: "测试服务器",
+          host: "127.0.0.1",
+          port: "22",
+          username: "root",
+          authMethod: "password",
+          password: "s3cr3t-value",
+          privateKeyPath: "",
+          privateKeyPassphrase: "",
+          defaultRemoteDir: "/srv/app",
+          hostKeyPolicy: "accept-new",
+          description: "smoke test",
+        },
+      };
+    }
+    return { action: "accept", content: { decision: approvalDecision } };
+  };
+
+  const saved = await client.tool("ssh_profile_upsert", { alias: "测试服务器" });
+  assert.deepEqual(elicitationSchemaViolations, [], "elicitation 表单必须符合 Codex 受限 schema 子集");
+  assert.equal(saved._meta.status, "已保存");
+  assert.equal(saved._meta.profile.password, undefined);
+  assert.equal(saved._meta.profile.hasPassword, true);
+  assert.equal(elicitationCount, 1);
+
+  const rawVault = fs.readFileSync(path.join(vaultHome, "vault.json"), "utf8");
+  assert.equal(rawVault.includes("s3cr3t-value"), false, "vault file must not contain the plaintext password");
+
+  const profiles = await client.tool("ssh_profile_list");
+  assert.equal(profiles._meta.count, 1);
+  assert.equal(profiles._meta.profiles[0].password, undefined);
+
+  const status = await client.tool("ssh_vault_status");
+  assert.match(status._meta.protection, /AES-256-GCM/);
+
+  const dashboard = await client.tool("ssh_operation_dashboard", { action: "打开" });
+  assert.equal(dashboard._meta.status, "运行中");
+  const dashboardUrl = new URL(dashboard._meta.url);
+  const token = dashboardUrl.searchParams.get("token");
+  const healthResponse = await fetch(`http://127.0.0.1:${dashboardUrl.port}/health?token=${token}`);
+  assert.equal(healthResponse.status, 200);
+  const operationResponse = await fetch(`http://127.0.0.1:${dashboardUrl.port}/api/operations?token=${token}`);
+  const operationPayload = await operationResponse.json();
+  assert.ok(Array.isArray(operationPayload.operations));
+  assert.ok(operationPayload.operations.some(op => op.sessionName === '测试会话'));
+  const eventResponse = await fetch(`http://127.0.0.1:${dashboardUrl.port}/events?token=${token}`);
+  assert.equal(eventResponse.status, 200);
+  const reader = eventResponse.body.getReader();
+  const firstEvent = await reader.read();
+  const firstEventText = new TextDecoder().decode(firstEvent.value || new Uint8Array());
+  assert.ok(firstEventText.includes("event: snapshot"));
+  await reader.cancel();
+
+  const terminalProfilesResponse = await fetch(`http://127.0.0.1:${dashboardUrl.port}/api/terminal/profiles?token=${token}`);
+  const terminalProfilesPayload = await terminalProfilesResponse.json();
+  assert.ok(terminalProfilesPayload.profiles.some(profile => profile.alias === "测试服务器"));
+
+  approvalDecision = "confirm";
+  const terminalOpen = await client.tool("ssh_terminal_open", { alias: "测试服务器" });
+  assert.equal(terminalOpen._meta.status, "已连接");
+  const terminalId = terminalOpen._meta.terminalId;
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  await client.tool("ssh_terminal_write", { terminalId, data: "echo hello\n" });
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  const terminalRead = await client.tool("ssh_terminal_read", { terminalId });
+  assert.match(terminalRead._meta.data, /FAKE_ECHO:echo hello/);
+  await client.tool("ssh_terminal_close", { terminalId });
+
+  const beforeSafe = fs.existsSync(callLog) ? fs.readFileSync(callLog, "utf8") : "";
+  const safe = await client.tool("ssh_exec", { alias: "测试服务器", command: "pwd", purpose: "检查当前目录" });
+  assert.equal(safe._meta.status, "已执行");
+  assert.equal(safe._meta.approval, "无需确认");
+  const safeText = (safe.content || []).find(item => item.type === "text")?.text || "";
+  assert.match(safeText, /ssh -p 22 root@127\.0\.0\.1 "pwd"/);
+  assert.match(safeText, /总结：检查当前目录/);
+  const afterSafe = fs.existsSync(callLog) ? fs.readFileSync(callLog, "utf8") : "";
+  assert.ok(afterSafe.length > beforeSafe.length);
+  assert.ok(afterSafe.includes("pwd"));
+
+  elicitationCount = 0;
+  approvalDecision = "cancel";
+  const beforeDenied = fs.existsSync(callLog) ? fs.readFileSync(callLog, "utf8") : "";
+  const denied = await client.tool("ssh_exec", {
+    alias: "测试服务器",
+    command: "systemctl restart demo-service",
+    purpose: "deny test",
+  });
+  assert.equal(denied._meta.status, "已拒绝");
+  assert.equal(elicitationCount, 1);
+  assert.equal(fs.existsSync(callLog) ? fs.readFileSync(callLog, "utf8") : "", beforeDenied, "denied command must not invoke ssh");
+
+  approvalDecision = "confirm";
+  const approved = await client.tool("ssh_exec", {
+    alias: "测试服务器",
+    command: "systemctl restart demo-service",
+    purpose: "approval test",
+  });
+  assert.equal(approved._meta.status, "已执行");
+  const approvedText = (approved.content || []).find(item => item.type === "text")?.text || "";
+  assert.match(approvedText, /ssh -p 22 root@127\.0\.0\.1 "systemctl restart demo-service"/);
+  assert.match(approvedText, /总结：approval test/);
+  assert.ok(fs.readFileSync(callLog, "utf8").includes("systemctl restart demo-service"));
+
+  // 超长命令必须仍能把选项留在可视区域内
+  elicitationCount = 0;
+  approvalDecision = "cancel";
+  const longCommand = [
+    "systemctl restart demo-service",
+    ...Array.from({ length: 40 }, (_, index) => "# padding line " + index + " " + "x".repeat(90)),
+  ].join("\n");
+  const longCommandResult = await client.tool("ssh_exec", {
+    alias: "测试服务器",
+    command: longCommand,
+    purpose: "超长命令确认表单预算测试",
+  });
+  assert.equal(longCommandResult._meta.status, "已拒绝");
+  assert.equal(elicitationCount, 1);
+  assert.ok(lastApprovalMessage.includes("已省略"), "超长命令的确认表单应给出省略提示");
+  assert.ok(lastApprovalMessage.length < 1000, "省略后的 message 应显著变短");
+
+  elicitationCount = 0;
+  approvalDecision = "confirm_and_auto";
+  const autoApproved = await client.tool("ssh_exec", {
+    alias: "测试服务器",
+    command: "systemctl restart auto-session-service",
+    purpose: "确认并开启会话免询问测试",
+  });
+  assert.equal(autoApproved._meta.status, "已执行");
+  assert.equal(elicitationCount, 1);
+  const autoStatus = await client.tool("ssh_vault_status");
+  assert.equal(autoStatus._meta.approvalMode, "会话免确认");
+
+  elicitationCount = 0;
+  approvalDecision = "cancel";
+  const sessionExec = await client.tool("ssh_exec", {
+    alias: "测试服务器",
+    command: "systemctl restart session-service",
+    purpose: "会话免确认测试",
+  });
+  assert.equal(sessionExec._meta.status, "已执行");
+  assert.equal(elicitationCount, 0);
+
+  const readOnlyMode = await client.tool("ssh_set_approval_mode", { mode: "只读免确认" });
+  assert.equal(readOnlyMode._meta.mode, "只读免确认");
+  const beforeBlocked = fs.readFileSync(callLog, "utf8");
+  elicitationCount = 0;
+  const blocked = await client.tool("ssh_exec", {
+    alias: "测试服务器",
+    command: "systemctl restart blocked-service",
+    purpose: "只读模式阻断测试",
+  });
+  assert.equal(blocked._meta.status, "已阻止");
+  assert.equal(elicitationCount, 0);
+  assert.equal(fs.readFileSync(callLog, "utf8"), beforeBlocked);
+
+  await client.tool("ssh_set_approval_mode", { mode: "默认执行" });
+  approvalDecision = "confirm";
+
+  const localFile = path.join(tempRoot, "index.html");
+  fs.writeFileSync(localFile, "<h1>ok</h1>", "utf8");
+  const deploy = await client.tool("ssh_deploy", {
+    alias: "测试服务器",
+    localPaths: [localFile],
+    remoteDirectory: "/srv/app",
+    postCommand: "systemctl restart demo-service",
+    purpose: "smoke deploy",
+  });
+  assert.equal(deploy._meta.status, "已部署");
+  const logAfterDeploy = fs.readFileSync(callLog, "utf8");
+  assert.ok(logAfterDeploy.includes("scp "));
+  assert.ok(logAfterDeploy.includes("systemctl restart demo-service"));
+
+  await client.tool("ssh_operation_dashboard", { action: "停止" });
+
+  approvalDecision = "cancel";
+  const removeDenied = await client.tool("ssh_profile_remove", { alias: "测试服务器" });
+  assert.equal(removeDenied._meta.status, "已拒绝");
+  const stillThere = await client.tool("ssh_profile_list");
+  assert.equal(stillThere._meta.count, 1);
+
+  assert.deepEqual(approvalMessageViolations, [], "确认表单 message 必须符合可视预算");
+
+  client.close();
+  await waitForExit(child);
+  assert.equal(stderr, "", `server stderr should be empty: ${stderr}`);
+  fs.rmSync(tempRoot, { recursive: true, force: true });
+  console.log("SSH_MANAGER_SMOKE_OK");
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

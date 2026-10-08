@@ -1,0 +1,20 @@
+{
+  "name": "jiura-plugins",
+  "interface": {
+    "displayName": "Jiura 插件"
+  },
+  "plugins": [
+    {
+      "name": "ssh-manager",
+      "source": {
+        "source": "local",
+        "path": "./plugins/ssh-manager"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "开发工具"
+    }
+  ]
+}

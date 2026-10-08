@@ -1,0 +1,17 @@
+# 运行时产物
+.dashboard.out
+.dashboard.err
+*.log
+
+# 本地备份
+*.bak
+*.bak-*
+*.bak2-*
+*.orig
+
+# 凭据（绝不应出现在仓库里）
+vault.json
+vault.key
+known_hosts
+
+node_modules/
