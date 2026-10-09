@@ -52,7 +52,7 @@ import {
 } from "./lib/ssh.mjs";
 
 const SERVER_NAME = "Codex SSH 管理器";
-const SERVER_VERSION = "0.1.0";
+const SERVER_VERSION = "0.1.3";
 const ELICITATION_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_MESSAGE_LENGTH = 20_000;
 // Codex 的 elicitation 面板高度 = message 换行后的行数 + 选项区高度
@@ -161,7 +161,7 @@ function displayShellQuote(value) {
   return `"${String(value || "").replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\$/g, "\\$")}"`;
 }
 
-function displayScpFlags(payload) {
+function displaySftpFlags(payload) {
   const flags = [];
   if (payload.recursive) flags.push("-r");
   if (payload.preserveTimes !== false) flags.push("-p");
@@ -190,17 +190,17 @@ function displayTextFor(payload) {
   if (action === "远程上传") {
     const localPaths = Array.isArray(payload.localPaths) ? payload.localPaths : [];
     const remoteDirectory = payload.remoteDirectory || "";
-    const flags = displayScpFlags(payload);
+    const flags = displaySftpFlags(payload);
     const summary = payload.purpose || `上传 ${localPaths.length || 1} 项到 ${remoteDirectory}`;
     const failed = payload.status === "失败" ? "（失败）" : "";
-    return `scp -P ${port}${flags.length ? " " + flags.join(" ") : ""} ${localPaths.join(" ")} ${target}:${remoteDirectory}\n总结：${summary}${failed}`;
+    return `sftp -P ${port}${flags.length ? " " + flags.join(" ") : ""} ${target}\nput ${localPaths.join(" ")} ${remoteDirectory}\n总结：${summary}${failed}`;
   }
   if (action === "远程部署") {
     const localPaths = Array.isArray(payload.localPaths) ? payload.localPaths : [];
     const remoteDirectory = payload.remoteDirectory || "";
     const postCommand = payload.postCommand || "";
-    const flags = displayScpFlags(payload);
-    const lines = [`scp -P ${port}${flags.length ? " " + flags.join(" ") : ""} ${localPaths.join(" ")} ${target}:${remoteDirectory}`];
+    const flags = displaySftpFlags(payload);
+    const lines = [`sftp -P ${port}${flags.length ? " " + flags.join(" ") : ""} ${target}\nput ${localPaths.join(" ")} ${remoteDirectory}`];
     if (postCommand) lines.push(`ssh -p ${port} ${target} ${displayShellQuote(postCommand)}`);
     const summary = payload.purpose || `部署到 ${remoteDirectory}`;
     const failed = payload.status === "失败" || payload.status === "部分失败" ? "（失败）" : "";
@@ -209,10 +209,10 @@ function displayTextFor(payload) {
   if (action === "远程下载") {
     const remotePaths = Array.isArray(payload.remotePaths) ? payload.remotePaths : [];
     const localDirectory = payload.localDirectory || "";
-    const flags = displayScpFlags(payload);
+    const flags = displaySftpFlags(payload);
     const summary = payload.purpose || `从远程下载 ${remotePaths.length || 1} 项到 ${localDirectory}`;
     const failed = payload.status === "失败" ? "（失败）" : "";
-    return `scp -P ${port}${flags.length ? " " + flags.join(" ") : ""} ${remotePaths.map((item) => `${target}:${item}`).join(" ")} ${localDirectory}\n总结：${summary}${failed}`;
+    return `sftp -P ${port}${flags.length ? " " + flags.join(" ") : ""} ${target}\nget ${remotePaths.join(" ")} ${localDirectory}\n总结：${summary}${failed}`;
   }
   if (action === "连接测试") {
     return `ssh -p ${port} ${target} ${displayShellQuote("printf 'SSH_MANAGER_OK\\n'")}\n总结：测试 SSH 连接`;
@@ -1071,7 +1071,7 @@ async function handleUpload(args) {
       details: `服务器：${profileSummary(profile)}
 本地路径：${previewPathList(input.localPaths)}
 远程目录：${input.remoteDirectory}
-传输方式：SCP${input.recursive ? "（递归）" : ""}，共约 ${input.descriptor.totalFiles} 个文件，${formatBytes(input.descriptor.totalBytes)}
+传输方式：SFTP${input.recursive ? "（递归）" : ""}，共约 ${input.descriptor.totalFiles} 个文件，${formatBytes(input.descriptor.totalBytes)}
 ${purpose ? `用途：${purpose}\n` : ""}影响：远程目录将被创建或覆盖同名文件。`,
     });
     if (!approval.approved) {
@@ -1154,7 +1154,7 @@ async function handleDeploy(args) {
       details: `服务器：${profileSummary(profile)}
 本地路径：${previewPathList(input.localPaths)}
 远程目录：${input.remoteDirectory}
-传输方式：SCP${input.recursive ? "（递归）" : ""}，共约 ${input.descriptor.totalFiles} 个文件，${formatBytes(input.descriptor.totalBytes)}
+传输方式：SFTP${input.recursive ? "（递归）" : ""}，共约 ${input.descriptor.totalFiles} 个文件，${formatBytes(input.descriptor.totalBytes)}
 ${postCommand ? `部署后命令：\n${limitPreviewLines(postCommand, 4)}\n` : ""}${purpose ? `用途：${purpose}\n` : ""}影响：远程目录将被创建或覆盖同名文件${postCommand ? "，随后执行上述命令" : ""}。`,
     });
     if (!approval.approved) {
@@ -1252,7 +1252,7 @@ async function handleDownload(args) {
       details: `服务器：${profileSummary(profile)}
 远程路径：${previewPathList(remotePaths)}
 本机目录：${localDirectory}
-传输方式：SCP${recursive ? "（递归）" : ""}
+传输方式：SFTP${recursive ? "（递归）" : ""}
 ${purpose ? `用途：${purpose}\n` : ""}影响：本机目录中可能出现新增或覆盖文件。`,
     });
     if (!approval.approved) {
@@ -1623,7 +1623,7 @@ const TOOLS = [
   {
     name: "ssh_upload",
     title: "上传文件到服务器",
-    description: "使用已保存的凭据通过 SCP 上传本地文件或目录。调用前必须先用一句简短中文说明服务器、本地路径和远程目录。",
+    description: "使用已保存的凭据通过 SFTP 上传本地文件或目录。调用前必须先用一句简短中文说明服务器、本地路径和远程目录。",
     inputSchema: {
       type: "object",
       properties: {
@@ -1662,7 +1662,7 @@ const TOOLS = [
   {
     name: "ssh_download",
     title: "从服务器下载文件",
-    description: "使用已保存的凭据通过 SCP 下载远程文件或目录。调用前必须先用一句简短中文说明远程来源和本机目标目录。",
+    description: "使用已保存的凭据通过 SFTP 下载远程文件或目录。调用前必须先用一句简短中文说明远程来源和本机目标目录。",
     inputSchema: {
       type: "object",
       properties: {

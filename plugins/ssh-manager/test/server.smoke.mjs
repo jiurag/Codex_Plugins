@@ -11,7 +11,7 @@ const serverPath = path.join(pluginRoot, "mcp", "server.mjs");
 const tempRoot = path.join(pluginRoot, ".test-rpc");
 const vaultHome = path.join(tempRoot, "vault");
 const fakeSsh = path.join(tempRoot, "fake-ssh.mjs");
-const fakeScp = path.join(tempRoot, "fake-scp.mjs");
+const fakeSftp = path.join(tempRoot, "fake-sftp.mjs");
 const callLog = path.join(tempRoot, "calls.log");
 
 function resetTemp() {
@@ -35,9 +35,9 @@ if (args.includes("-tt")) {
   process.stdout.write("FAKE_SSH " + args.join(" ") + "\\n");
 }
 `;
-  const scpSource = `import fs from "node:fs";\nconst line = "scp " + process.argv.slice(2).join(" ") + "\\n";\nfs.appendFileSync(${JSON.stringify(callLog)}, line);\nprocess.stdout.write("FAKE_SCP " + process.argv.slice(2).join(" ") + "\\n");\n`;
+  const sftpSource = `import fs from "node:fs";\nimport readline from "node:readline";\nconst args = process.argv.slice(2);\nfs.appendFileSync(${JSON.stringify(callLog)}, "sftp " + args.join(" ") + "\\n");\nprocess.stdout.write("FAKE_SFTP " + args.join(" ") + "\\n");\nconst rl = readline.createInterface({ input: process.stdin, terminal: false });\nrl.on("line", (line) => {\n  fs.appendFileSync(${JSON.stringify(callLog)}, "  " + line + "\\n");\n  if (line.startsWith("!echo ")) { process.stdout.write(line.slice(6) + "\\n"); }\n  else if (line.trim() && line.trim() !== "exit") { process.stdout.write("FAKE_SFTP_CMD:" + line + "\\n"); }\n});\nrl.on("close", () => process.exit(0));\n`;
   fs.writeFileSync(fakeSsh, sshSource, "utf8");
-  fs.writeFileSync(fakeScp, scpSource, "utf8");
+  fs.writeFileSync(fakeSftp, sftpSource, "utf8");
 }
 
 // Codex 确认表单只接受受限 JSON Schema 子集。若混入数组、writeOnly、format:"password" 等
@@ -163,7 +163,7 @@ async function main() {
     ...process.env,
     SSH_MANAGER_HOME: vaultHome,
     SSH_MANAGER_SSH_BIN: fakeSsh,
-    SSH_MANAGER_SCP_BIN: fakeScp,
+    SSH_MANAGER_SFTP_BIN: fakeSftp,
   };
   const child = spawn(process.execPath, [serverPath], {
     cwd: pluginRoot,
@@ -382,7 +382,9 @@ async function main() {
   });
   assert.equal(deploy._meta.status, "已部署");
   const logAfterDeploy = fs.readFileSync(callLog, "utf8");
-  assert.ok(logAfterDeploy.includes("scp "));
+  assert.ok(logAfterDeploy.includes("sftp "));
+  assert.ok(logAfterDeploy.includes("put "), "上传应通过 sftp 的 put 指令完成");
+  assert.equal(logAfterDeploy.toLowerCase().includes("scp"), false, "不得再调用 scp");
   assert.ok(logAfterDeploy.includes("systemctl restart demo-service"));
 
   await client.tool("ssh_operation_dashboard", { action: "停止" });

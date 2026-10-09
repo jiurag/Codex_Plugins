@@ -343,17 +343,23 @@ function appendCaptured(target, chunk, state) {
   target.push(buffer);
 }
 
-async function runProcess(executable, args, { env, timeoutMs = DEFAULT_TIMEOUT_SECONDS * 1000 } = {}) {
+async function runProcess(executable, args, { env, timeoutMs = DEFAULT_TIMEOUT_SECONDS * 1000, input } = {}) {
   return new Promise((resolve, reject) => {
     const startedAt = Date.now();
     const isNodeScript = /\.(?:mjs|cjs|js)$/i.test(executable);
     const actualExecutable = isNodeScript ? process.execPath : executable;
     const actualArgs = isNodeScript ? [executable, ...args] : args;
+    const hasInput = typeof input === "string";
     const child = spawn(actualExecutable, actualArgs, {
       env: env || process.env,
       windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: [hasInput ? "pipe" : "ignore", "pipe", "pipe"],
     });
+    if (hasInput) {
+      // sftp -b - 从 stdin 读批处理命令；提前退出时忽略 EPIPE。
+      child.stdin.on("error", () => {});
+      child.stdin.end(input);
+    }
     const stdout = [];
     const stderr = [];
     const stdoutState = { total: 0, truncated: false };
@@ -1032,17 +1038,15 @@ function validateRemoteInputs(remotePaths, recursive) {
   });
 }
 
-export async function uploadPaths(profile, localPaths, remoteDirectory, options = {}) {
-  validateProfileShape(profile);
-  const recursive = Boolean(options.recursive);
-  const preserveTimes = options.preserveTimes !== false;
-  const timeoutMs = validateTimeoutSeconds(options.timeoutSeconds) * 1000;
-  const sources = validateLocalInputs(localPaths, recursive);
-  const targetDirectory = validateRemotePath(remoteDirectory, "remoteDirectory");
-  const executable = process.env.SSH_MANAGER_SCP_BIN || "scp";
+// 非持久路径的传输也统一走 SFTP（OpenSSH 自带，不再调用 scp）。
+// 用 `sftp -b -` 批处理模式，把 put/get 指令从 stdin 喂进去。
+function runSftpTransfer(profile, batchLines, { env, recursive, preserveTimes, timeoutMs }) {
+  const executable = process.env.SSH_MANAGER_SFTP_BIN || "sftp";
   const args = [
+    "-q",
     ...connectionArguments(profile, { includePort: false }),
     "-P", String(profile.port),
+    "-b", "-",
   ];
   if (recursive) {
     args.push("-r");
@@ -1050,8 +1054,26 @@ export async function uploadPaths(profile, localPaths, remoteDirectory, options 
   if (preserveTimes) {
     args.push("-p");
   }
-  args.push(...sources, `${connectionTarget(profile)}:${targetDirectory}`);
-  return withAskpass(profile, (env) => runProcess(executable, args, { env, timeoutMs }));
+  args.push(connectionTarget(profile));
+  const input = batchLines.length > 0 ? batchLines.join("\n") + "\n" : "";
+  return runProcess(executable, args, { env, timeoutMs, input });
+}
+
+function transferBatchLine(direction, source, destination, recursive) {
+  const verb = direction === "upload" ? "put" : "get";
+  const flag = recursive ? " -r" : "";
+  return verb + flag + " " + sftpQuote(source) + " " + sftpQuote(destination);
+}
+
+export async function uploadPaths(profile, localPaths, remoteDirectory, options = {}) {
+  validateProfileShape(profile);
+  const recursive = Boolean(options.recursive);
+  const preserveTimes = options.preserveTimes !== false;
+  const timeoutMs = validateTimeoutSeconds(options.timeoutSeconds) * 1000;
+  const sources = validateLocalInputs(localPaths, recursive);
+  const targetDirectory = validateRemotePath(remoteDirectory, "remoteDirectory");
+  const batch = sources.map((source) => transferBatchLine("upload", source, targetDirectory, fs.statSync(source).isDirectory()));
+  return withAskpass(profile, (env) => runSftpTransfer(profile, batch, { env, recursive, preserveTimes, timeoutMs }));
 }
 
 export async function downloadPaths(profile, remotePaths, localDirectory, options = {}) {
@@ -1064,19 +1086,8 @@ export async function downloadPaths(profile, remotePaths, localDirectory, option
   if (!fs.statSync(destination).isDirectory()) {
     throw new ToolInputError("本机目标目录必须已存在。");
   }
-  const executable = process.env.SSH_MANAGER_SCP_BIN || "scp";
-  const args = [
-    ...connectionArguments(profile, { includePort: false }),
-    "-P", String(profile.port),
-  ];
-  if (recursive) {
-    args.push("-r");
-  }
-  if (preserveTimes) {
-    args.push("-p");
-  }
-  args.push(...sources.map((item) => `${connectionTarget(profile)}:${item}`), destination);
-  return withAskpass(profile, (env) => runProcess(executable, args, { env, timeoutMs }));
+  const batch = sources.map((source) => transferBatchLine("download", source, destination, recursive));
+  return withAskpass(profile, (env) => runSftpTransfer(profile, batch, { env, recursive, preserveTimes, timeoutMs }));
 }
 
 export function describeLocalPaths(localPaths) {

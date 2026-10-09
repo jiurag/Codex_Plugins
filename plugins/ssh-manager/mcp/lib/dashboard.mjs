@@ -517,29 +517,31 @@ function sshCommand(op, command){
   const port = String(op.port || 22);
   return 'ssh -p ' + port + ' ' + commandTarget(op) + ' ' + shellQuote(command);
 }
-function scpFlags(d){
+function sftpFlags(d){
   const flags = [];
   if (d.recursive) flags.push('-r');
   if (d.preserveTimes !== false) flags.push('-p');
   return flags;
 }
-function scpCommand(op, d, remoteTargets, destination){
-  const flags = scpFlags(d);
-  const parts = ['scp', '-P', String(op.port || 22), ...flags];
-  parts.push(...remoteTargets, destination);
-  return parts.join(' ');
+function sftpCommand(op, d, direction, sources, destination){
+  const flags = sftpFlags(d);
+  const port = String(op.port || 22);
+  const verb = direction === 'upload' ? 'put' : 'get';
+  const head = 'sftp -P ' + port + (flags.length ? ' ' + flags.join(' ') : '') + ' ' + commandTarget(op);
+  const body = verb + ' ' + (Array.isArray(sources) ? sources.join(' ') : '') + ' ' + destination;
+  return head + '\n' + body;
 }
 function instructionText(op){
   const d = op.details || {};
   const target = commandTarget(op);
   if (op.action === '远程命令') return sshCommand(op, d.command || '');
-  if (op.action === '远程上传') return scpCommand(op, d, Array.isArray(d.localPaths) ? d.localPaths : [], target + ':' + (d.remoteDirectory || ''));
+  if (op.action === '远程上传') return sftpCommand(op, d, 'upload', Array.isArray(d.localPaths) ? d.localPaths : [], d.remoteDirectory || '');
   if (op.action === '远程部署'){
-    const lines = [scpCommand(op, d, Array.isArray(d.localPaths) ? d.localPaths : [], target + ':' + (d.remoteDirectory || ''))];
+    const lines = [sftpCommand(op, d, 'upload', Array.isArray(d.localPaths) ? d.localPaths : [], d.remoteDirectory || '')];
     if (d.postCommand) lines.push(sshCommand(op, d.postCommand));
     return lines.join('\n');
   }
-  if (op.action === '远程下载') return scpCommand(op, d, (d.remotePaths || []).map(item => target + ':' + item), d.localDirectory || '');
+  if (op.action === '远程下载') return sftpCommand(op, d, 'download', d.remotePaths || [], d.localDirectory || '');
   if (op.action === '连接测试') return sshCommand(op, "printf 'SSH_MANAGER_OK\\n'");
   if (op.action === '交互式终端') return 'ssh -tt -p ' + (op.port || 22) + ' ' + target;
   if (op.action === '打开持久连接') return 'ssh -T -p ' + (op.port || 22) + ' ' + target;
