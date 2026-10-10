@@ -1038,31 +1038,182 @@ function validateRemoteInputs(remotePaths, recursive) {
   });
 }
 
-// 非持久路径的传输也统一走 SFTP（OpenSSH 自带，不再调用 scp）。
-// 用 `sftp -b -` 批处理模式，把 put/get 指令从 stdin 喂进去。
-function runSftpTransfer(profile, batchLines, { env, recursive, preserveTimes, timeoutMs }) {
-  const executable = process.env.SSH_MANAGER_SFTP_BIN || "sftp";
-  const args = [
-    "-q",
-    ...connectionArguments(profile, { includePort: false }),
-    "-P", String(profile.port),
-    "-b", "-",
-  ];
-  if (recursive) {
-    args.push("-r");
+// ===== 传输层 =====
+// 设计要点（针对"经常坏 + 原因黑盒"的修复）：
+//  1. 用交互式 SFTP 会话执行，不用 `sftp -b` 批处理 —— 批处理模式下单条命令失败会静默中止，
+//     错误信息容易被吞掉，退出码也无法区分失败类型。
+//  2. 全程收集 stdout + stderr，原样带回给调用方。
+//  3. 成败判定基于输出内容 + 传输后校验，不再只看退出码。
+//  4. 错误归类为：认证失败 / 连接不通 / 路径不存在 / 权限不足 等，并给出排查提示。
+
+const TRANSFER_ERROR_RULES = [
+  {
+    kind: "认证失败",
+    pattern: /permission denied \(publickey|authentication failed|no supported authentication methods|too many authentication failures|invalid user/i,
+    hint: "检查用户名、密码/私钥是否正确，以及服务器允许的认证方式。",
+  },
+  {
+    kind: "主机指纹不匹配",
+    pattern: /host key verification failed|remote host identification has changed/i,
+    hint: "核对 known_hosts，或把该服务器的主机指纹策略改为『首次连接自动接受』。",
+  },
+  {
+    kind: "域名解析失败",
+    pattern: /could not resolve hostname|name or service not known|temporary failure in name resolution/i,
+    hint: "检查服务器地址是否写对。",
+  },
+  {
+    kind: "连接不通",
+    pattern: /connection refused|connection timed out|operation timed out|no route to host|network is unreachable|connection closed|connection reset|broken pipe|disconnected/i,
+    hint: "检查网络、端口、防火墙，或确认服务器在线；也说明常驻会话可能已被中间设备断开。",
+  },
+  {
+    kind: "路径不存在",
+    pattern: /no such file or directory|no such file|not found|cannot stat|does not exist/i,
+    hint: "核对本地/远端路径；远端目标目录需要事先存在。",
+  },
+  {
+    kind: "权限不足",
+    pattern: /permission denied|access denied|not permitted|operation not permitted/i,
+    hint: "检查远端目录/文件的读写权限，或换用有权限的账户。",
+  },
+  {
+    kind: "空间不足",
+    pattern: /no space left|disk quota exceeded/i,
+    hint: "清理远端磁盘空间或调整配额。",
+  },
+  {
+    kind: "传输失败",
+    pattern: /failure|failed|couldn\x27t|unable to|is not a regular file|invalid argument/i,
+    hint: "查看下方原始输出定位。",
+  },
+];
+
+// 从子进程输出里判断失败类型；返回 null 表示没发现错误。
+function classifyTransferFailure(output) {
+  const text = String(output || "");
+  for (const rule of TRANSFER_ERROR_RULES) {
+    if (rule.pattern.test(text)) {
+      return { kind: rule.kind, hint: rule.hint };
+    }
   }
-  if (preserveTimes) {
-    args.push("-p");
-  }
-  args.push(connectionTarget(profile));
-  const input = batchLines.length > 0 ? batchLines.join("\n") + "\n" : "";
-  return runProcess(executable, args, { env, timeoutMs, input });
+  return null;
 }
 
-function transferBatchLine(direction, source, destination, recursive) {
+// 交互式执行一组 sftp 命令：每条命令后跟一个 !echo 标记，标记全部出现即视为执行完毕。
+function runSftpInteractive(profile, commands, { env, recursive, preserveTimes, timeoutMs }) {
+  return new Promise((resolve) => {
+    const executable = process.env.SSH_MANAGER_SFTP_BIN || "sftp";
+    const isNodeScript = /\.(?:mjs|cjs|js)$/i.test(executable);
+    const actualExecutable = isNodeScript ? process.execPath : executable;
+    const baseArgs = ["-q", ...connectionArguments(profile, { includePort: false })];
+    if (recursive) baseArgs.push("-r");
+    if (preserveTimes) baseArgs.push("-p");
+    baseArgs.push("-P", String(profile.port), connectionTarget(profile));
+    const actualArgs = isNodeScript ? [executable, ...baseArgs] : baseArgs;
+    const startedAt = Date.now();
+    const child = spawn(actualExecutable, actualArgs, {
+      env: env || process.env,
+      windowsHide: true,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    let timedOut = false;
+    let exited = false;
+    let timer = null;
+    const markers = commands.map((_, index) => "__SSH_MANAGER_SFTP_DONE_" + index + "__");
+
+    const finish = (reason) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      if (!exited) {
+        try { child.kill("SIGTERM"); } catch { /* ignore */ }
+      }
+      const missing = markers.filter((marker) => !stdout.includes(marker));
+      resolve({
+        executable,
+        stdout,
+        stderr,
+        timedOut,
+        exited,
+        reason,
+        completed: missing.length === 0,
+        missingCount: missing.length,
+        durationMs: Date.now() - startedAt,
+        signal: null,
+        stdoutTruncated: false,
+        stderrTruncated: false,
+      });
+    };
+
+    timer = setTimeout(() => { timedOut = true; finish("timeout"); }, timeoutMs);
+    if (typeof timer.unref === "function") timer.unref();
+
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString("utf8");
+      if (markers.every((marker) => stdout.includes(marker))) finish("completed");
+    });
+    child.stderr.on("data", (chunk) => { stdout += ""; stderr += chunk.toString("utf8"); });
+    child.on("error", (error) => { stderr += "\n" + error.message; finish("error"); });
+    child.on("close", (code) => { exited = true; finish("closed:" + code); });
+
+    child.stdin.on("error", () => { /* 子进程提前退出时忽略 EPIPE */ });
+    const script = commands.map((command, index) => command + "\n!echo " + markers[index]).join("\n") + "\nexit\n";
+    child.stdin.end(script);
+  });
+}
+
+function transferCommand(direction, source, destination) {
   const verb = direction === "upload" ? "put" : "get";
-  const flag = recursive ? " -r" : "";
-  return verb + flag + " " + sftpQuote(source) + " " + sftpQuote(destination);
+  return verb + " " + sftpQuote(source) + " " + sftpQuote(destination);
+}
+
+function remoteJoin(directory, name) {
+  const base = String(directory || "").replace(/\/+$/, "");
+  return (base === "" ? "" : base) + "/" + name;
+}
+
+// 把原始执行结果整理成调用方要的形态：带输出、带分类、带校验结论。
+function finalizeTransferResult(raw, { direction, expectedRemote, expectedLocal }) {
+  const combined = raw.stdout + "\n" + raw.stderr;
+  const failure = classifyTransferFailure(combined);
+  const missingLocal = direction === "download" ? expectedLocal.filter((item) => !fs.existsSync(item)) : [];
+  const verified = missingLocal.length === 0;
+  const ok = raw.completed && !failure && verified;
+  let failureKind = null;
+  let failureHint = null;
+  if (failure) {
+    failureKind = failure.kind;
+    failureHint = failure.hint;
+  } else if (raw.timedOut) {
+    failureKind = "传输超时";
+    failureHint = "可在调用时调大 timeoutSeconds，或检查网络与远端磁盘。";
+  } else if (!raw.completed) {
+    failureKind = "传输未完成";
+    failureHint = "有命令未收到完成确认，连接可能已中断。";
+  } else if (missingLocal.length > 0) {
+    failureKind = "校验未通过";
+    failureHint = "命令已执行但目标文件未落地：" + missingLocal.join("、");
+  }
+  return {
+    exitCode: ok ? 0 : 1,
+    signal: null,
+    timedOut: raw.timedOut,
+    durationMs: raw.durationMs,
+    stdout: raw.stdout,
+    stderr: raw.stderr,
+    stdoutTruncated: false,
+    stderrTruncated: false,
+    completed: raw.completed,
+    verified,
+    failureKind,
+    failureHint,
+    expectedRemote: expectedRemote || [],
+  };
 }
 
 export async function uploadPaths(profile, localPaths, remoteDirectory, options = {}) {
@@ -1072,8 +1223,22 @@ export async function uploadPaths(profile, localPaths, remoteDirectory, options 
   const timeoutMs = validateTimeoutSeconds(options.timeoutSeconds) * 1000;
   const sources = validateLocalInputs(localPaths, recursive);
   const targetDirectory = validateRemotePath(remoteDirectory, "remoteDirectory");
-  const batch = sources.map((source) => transferBatchLine("upload", source, targetDirectory, fs.statSync(source).isDirectory()));
-  return withAskpass(profile, (env) => runSftpTransfer(profile, batch, { env, recursive, preserveTimes, timeoutMs }));
+
+  const expectedRemote = [];
+  const commands = [];
+  for (const source of sources) {
+    commands.push(transferCommand("upload", source, targetDirectory));
+    expectedRemote.push(remoteJoin(targetDirectory, path.basename(source)));
+  }
+  // 传输后确认目标确实落地：sftp 的 put 失败时不一定返回非零退出码。
+  for (const remotePath of expectedRemote) {
+    commands.push("ls -l " + sftpQuote(remotePath));
+  }
+
+  const raw = await withAskpass(profile, (env) =>
+    runSftpInteractive(profile, commands, { env, recursive, preserveTimes, timeoutMs }),
+  );
+  return finalizeTransferResult(raw, { direction: "upload", expectedRemote });
 }
 
 export async function downloadPaths(profile, remotePaths, localDirectory, options = {}) {
@@ -1086,10 +1251,22 @@ export async function downloadPaths(profile, remotePaths, localDirectory, option
   if (!fs.statSync(destination).isDirectory()) {
     throw new ToolInputError("本机目标目录必须已存在。");
   }
-  const batch = sources.map((source) => transferBatchLine("download", source, destination, recursive));
-  return withAskpass(profile, (env) => runSftpTransfer(profile, batch, { env, recursive, preserveTimes, timeoutMs }));
-}
 
+  const expectedLocal = [];
+  const commands = [];
+  for (const source of sources) {
+    commands.push(transferCommand("download", source, destination));
+    const base = path.posix.basename(String(source).replace(/\/+$/, ""));
+    if (base && base !== "." && base !== "..") {
+      expectedLocal.push(path.join(destination, base));
+    }
+  }
+
+  const raw = await withAskpass(profile, (env) =>
+    runSftpInteractive(profile, commands, { env, recursive, preserveTimes, timeoutMs }),
+  );
+  return finalizeTransferResult(raw, { direction: "download", expectedLocal });
+}
 export function describeLocalPaths(localPaths) {
   const entries = [];
   let totalBytes = 0;

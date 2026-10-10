@@ -52,7 +52,7 @@ import {
 } from "./lib/ssh.mjs";
 
 const SERVER_NAME = "Codex SSH 管理器";
-const SERVER_VERSION = "0.1.3";
+const SERVER_VERSION = "0.1.4";
 const ELICITATION_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_MESSAGE_LENGTH = 20_000;
 // Codex 的 elicitation 面板高度 = message 换行后的行数 + 选项区高度
@@ -136,7 +136,32 @@ function request(method, params, timeoutMs = ELICITATION_TIMEOUT_MS) {
 }
 
 function toolResult(id, payload, { isError = false } = {}) {
-  const text = displayTextFor(payload) || JSON.stringify(payload, null, 2);
+  const summary = displayTextFor(payload) || JSON.stringify(payload, null, 2);
+  // 传输类结果的明细挂在 payload.result 上，这里统一取出。
+  const detail =
+    payload && typeof payload.result === "object" && payload.result !== null ? payload.result : payload;
+  const parts = [summary];
+  const failureKind = payload?.failureKind || detail?.failureKind;
+  const failureHint = payload?.failureHint || detail?.failureHint;
+  if (failureKind) {
+    parts.push("失败类型：" + failureKind);
+  }
+  if (failureHint) {
+    parts.push("建议：" + failureHint);
+  }
+  const failed =
+    isError || Boolean(failureKind) || payload?.status === "失败" || payload?.status === "部分失败";
+  if (failed) {
+    const stderr = typeof detail?.stderr === "string" ? detail.stderr.trim() : "";
+    const stdout = typeof detail?.stdout === "string" ? detail.stdout.trim() : "";
+    const rawOutput = [stderr, stdout].filter(Boolean).join("\n").trim();
+    if (rawOutput) {
+      const clipped =
+        rawOutput.length > 2000 ? rawOutput.slice(0, 2000) + "\n…（原始输出已截断）" : rawOutput;
+      parts.push("原始输出：\n" + clipped);
+    }
+  }
+  const text = parts.join("\n");
   sendResult(id, {
     content: [
       {
@@ -376,6 +401,24 @@ function previewPathList(paths, limit = 1) {
   return list.length > limit ? shown + ' 等 ' + list.length + ' 项' : shown;
 }
 
+// 常驻 SFTP 会话可能已被中间设备静默断开：子进程还活着，但连接早已失效。
+// 此时复用会话会立刻失败，所以失败后丢弃它，并用一次性 sftp 连接重试一次。
+async function transferWithFallback(profile, runPersistent, runOneshot) {
+  if (!hasPersistentSftpSession(profile)) {
+    return runOneshot();
+  }
+  try {
+    const result = await runPersistent();
+    if (result && result.exitCode === 0) {
+      return result;
+    }
+  } catch {
+    // 常驻会话抛错同样按"会话已坏"处理。
+  }
+  closePersistentSftpSession(profile);
+  return runOneshot();
+}
+
 async function askApproval({ title, message, details }) {
   let result;
   try {
@@ -477,6 +520,10 @@ function operationResultDetails(result) {
     stderr: result.stderr,
     stdoutTruncated: result.stdoutTruncated,
     stderrTruncated: result.stderrTruncated,
+    completed: result.completed,
+    verified: result.verified,
+    failureKind: result.failureKind,
+    failureHint: result.failureHint,
   };
 }
 
@@ -926,10 +973,12 @@ async function handleSessionOpen(args) {
   const profile = resolveProfile(vault, args.alias);
   const session = openPersistentSession(profile);
   let sftp = null;
+  let sftpError = null;
   try {
     sftp = openPersistentSftpSession(profile);
-  } catch {
-    sftp = null;
+  } catch (error) {
+    // 之前这里静默吞掉错误，导致"SFTP 用不了"却看不出原因。
+    sftpError = error instanceof Error ? error.message : String(error);
   }
   audit(vault, {
     alias: profile.alias,
@@ -937,9 +986,9 @@ async function handleSessionOpen(args) {
     approved: true,
     result: "已连接",
     summary: `打开 ${profile.alias} 的 OpenSSH 和 SFTP 持久连接`,
-    details: { session, sftp },
+    details: { session, sftp, sftpError },
   });
-  return { status: "已连接", session, sftp };
+  return { status: "已连接", session, sftp, sftpError };
 }
 
 async function handleSessionClose(args) {
@@ -1094,17 +1143,16 @@ ${purpose ? `用途：${purpose}\n` : ""}影响：远程目录将被创建或覆
     }
   }
 
-  const result = hasPersistentSftpSession(profile)
-    ? await uploadPathsPersistent(profile, input.localPaths, input.remoteDirectory, {
-        recursive: input.recursive,
-        preserveTimes: input.preserveTimes,
-        timeoutSeconds: input.timeoutSeconds,
-      })
-    : await uploadPaths(profile, input.localPaths, input.remoteDirectory, {
-        recursive: input.recursive,
-        preserveTimes: input.preserveTimes,
-        timeoutSeconds: input.timeoutSeconds,
-      });
+  const uploadOptions = {
+    recursive: input.recursive,
+    preserveTimes: input.preserveTimes,
+    timeoutSeconds: input.timeoutSeconds,
+  };
+  const result = await transferWithFallback(
+    profile,
+    () => uploadPathsPersistent(profile, input.localPaths, input.remoteDirectory, uploadOptions),
+    () => uploadPaths(profile, input.localPaths, input.remoteDirectory, uploadOptions),
+  );
   audit(vault, {
     alias: profile.alias,
     action: "远程上传",
@@ -1275,17 +1323,12 @@ ${purpose ? `用途：${purpose}\n` : ""}影响：本机目录中可能出现新
     }
   }
 
-  const result = hasPersistentSftpSession(profile)
-    ? await downloadPathsPersistent(profile, remotePaths, localDirectory, {
-        recursive,
-        preserveTimes,
-        timeoutSeconds,
-      })
-    : await downloadPaths(profile, remotePaths, localDirectory, {
-        recursive,
-        preserveTimes,
-        timeoutSeconds,
-      });
+  const downloadOptions = { recursive, preserveTimes, timeoutSeconds };
+  const result = await transferWithFallback(
+    profile,
+    () => downloadPathsPersistent(profile, remotePaths, localDirectory, downloadOptions),
+    () => downloadPaths(profile, remotePaths, localDirectory, downloadOptions),
+  );
   audit(vault, {
     alias: profile.alias,
     action: "远程下载",

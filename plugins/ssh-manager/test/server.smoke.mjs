@@ -13,6 +13,7 @@ const vaultHome = path.join(tempRoot, "vault");
 const fakeSsh = path.join(tempRoot, "fake-ssh.mjs");
 const fakeSftp = path.join(tempRoot, "fake-sftp.mjs");
 const callLog = path.join(tempRoot, "calls.log");
+const sftpFailFlag = path.join(tempRoot, "sftp-session-broken");
 
 function resetTemp() {
   fs.rmSync(tempRoot, { recursive: true, force: true });
@@ -35,7 +36,7 @@ if (args.includes("-tt")) {
   process.stdout.write("FAKE_SSH " + args.join(" ") + "\\n");
 }
 `;
-  const sftpSource = `import fs from "node:fs";\nimport readline from "node:readline";\nconst args = process.argv.slice(2);\nfs.appendFileSync(${JSON.stringify(callLog)}, "sftp " + args.join(" ") + "\\n");\nprocess.stdout.write("FAKE_SFTP " + args.join(" ") + "\\n");\nconst rl = readline.createInterface({ input: process.stdin, terminal: false });\nrl.on("line", (line) => {\n  fs.appendFileSync(${JSON.stringify(callLog)}, "  " + line + "\\n");\n  if (line.startsWith("!echo ")) { process.stdout.write(line.slice(6) + "\\n"); }\n  else if (line.trim() && line.trim() !== "exit") { process.stdout.write("FAKE_SFTP_CMD:" + line + "\\n"); }\n});\nrl.on("close", () => process.exit(0));\n`;
+  const sftpSource = `import fs from "node:fs";\nimport path from "node:path";\nimport readline from "node:readline";\nconst args = process.argv.slice(2);\nconst isBatch = args.includes("-b");\nconst failFlag = ${JSON.stringify(sftpFailFlag)};\nfs.appendFileSync(${JSON.stringify(callLog)}, "sftp " + args.join(" ") + "\\n");\n/* 不回显参数：真实 sftp 也不会这样做，且会污染失败判定 */\nconst rl = readline.createInterface({ input: process.stdin, terminal: false });\nrl.on("line", (line) => {\n  fs.appendFileSync(${JSON.stringify(callLog)}, "  " + line + "\\n");\n  if (fs.existsSync(failFlag) && /^(put|get)\\b/.test(line.trim())) {\n    fs.rmSync(failFlag, { force: true });\n    fs.appendFileSync(${JSON.stringify(callLog)}, "  [FAKE_SFTP_SESSION_BROKEN]\\n");\n    process.stderr.write("Connection closed by remote host\\r\\n");\n    process.exit(1);\n  }\n  const getMatch = /^get(?: -r)? "([^"]*)" "([^"]*)"$/.exec(line.trim());\n  if (getMatch) {\n    const base = getMatch[1].split("/").filter(Boolean).pop() || "file";\n    try { fs.mkdirSync(getMatch[2], { recursive: true }); fs.writeFileSync(path.join(getMatch[2], base), "fake"); } catch {}\n  }\n  if (line.startsWith("!echo ")) { process.stdout.write(line.slice(6) + "\\n"); }\n  else if (line.trim() && line.trim() !== "exit") { process.stdout.write("FAKE_SFTP_CMD:" + line + "\\n"); }\n});\nrl.on("close", () => process.exit(0));\n`;
   fs.writeFileSync(fakeSsh, sshSource, "utf8");
   fs.writeFileSync(fakeSftp, sftpSource, "utf8");
 }
@@ -384,6 +385,27 @@ async function main() {
   const logAfterDeploy = fs.readFileSync(callLog, "utf8");
   assert.ok(logAfterDeploy.includes("sftp "));
   assert.ok(logAfterDeploy.includes("put "), "上传应通过 sftp 的 put 指令完成");
+
+  // 先真正打开常驻会话（SSH + SFTP），否则降级路径不会被触发
+  const opened = await client.tool("ssh_session_open", { alias: "测试服务器" });
+  assert.equal(opened._meta.status, "已连接");
+  assert.ok(opened._meta.sftp, "常驻 SFTP 会话应建立成功，错误：" + (opened._meta.sftpError || "无"));
+
+  // 常驻 SFTP 会话静默断开后，应丢弃坏会话并自动改用一次性连接重试
+  fs.writeFileSync(sftpFailFlag, "1");
+  const beforeFallback = fs.readFileSync(callLog, "utf8");
+  const fallbackUpload = await client.tool("ssh_upload", {
+    alias: "测试服务器",
+    localPaths: [localFile],
+    remoteDirectory: "/srv/app",
+    purpose: "常驻会话断开降级测试",
+  });
+  assert.equal(fallbackUpload._meta.status, "已上传", "常驻会话断开后应自动降级并成功");
+  const fallbackSegment = fs.readFileSync(callLog, "utf8").slice(beforeFallback.length);
+  assert.ok(fallbackSegment.includes("FAKE_SFTP_SESSION_BROKEN"), "应命中模拟的常驻会话断开");
+  const reconnectCount = (fallbackSegment.match(/^sftp /gm) || []).length;
+  assert.ok(reconnectCount >= 1, "降级后应重新建立 sftp 连接（实际 " + reconnectCount + " 次）");
+  fs.rmSync(sftpFailFlag, { force: true });
   assert.equal(logAfterDeploy.toLowerCase().includes("scp"), false, "不得再调用 scp");
   assert.ok(logAfterDeploy.includes("systemctl restart demo-service"));
 
@@ -407,4 +429,6 @@ async function main() {
 main().catch((error) => {
   console.error(error);
   process.exitCode = 1;
+  // 断言失败时子进程可能仍在运行，这里确保测试进程能退出。
+  setTimeout(() => process.exit(1), 500);
 });
