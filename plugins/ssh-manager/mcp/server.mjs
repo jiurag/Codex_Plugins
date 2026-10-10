@@ -53,11 +53,12 @@ import {
   validateTimeoutSeconds,
   READ_ONLY_TIMEOUT_SECONDS,
   DEFAULT_TIMEOUT_SECONDS,
+  classifyRemoteFailure,
   validateUsername,
 } from "./lib/ssh.mjs";
 
 const SERVER_NAME = "Codex SSH 管理器";
-const SERVER_VERSION = "0.2.0";
+const SERVER_VERSION = "0.2.1";
 const ELICITATION_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_MESSAGE_LENGTH = 20_000;
 // Codex 的 elicitation 面板高度 = message 换行后的行数 + 选项区高度
@@ -147,7 +148,9 @@ function blockedByReadOnlyMode(action) {
     action,
     approved: false,
     reason: "只读模式",
-    message: "当前为“只读免确认”模式，只允许执行只读操作；本次操作未执行。",
+    message:
+      "已阻止：" + action + " 属于变更类操作。当前为「只读免确认」模式，只允许只读命令。" +
+      "如需执行变更，请先用 ssh_set_approval_mode 切回「默认执行」。",
   };
 }
 
@@ -293,27 +296,68 @@ function collectResultOutput(payload) {
 
 // 输出段的统一渲染：先报退出码，再贴内容；内容为空时显式写"（无输出）"。
 // 目的是让"命令本来就没输出"和"输出没被回传"在正文里长得不一样。
+// 正文只保留头尾若干行，避免一次 ls -lR 淹没整个对话（完整内容仍在日志里）。
+const DISPLAY_HEAD_LINES = 20;
+const DISPLAY_TAIL_LINES = 20;
+
+function clipOutputForDisplay(text) {
+  const lines = text.split("\n");
+  if (lines.length <= DISPLAY_HEAD_LINES + DISPLAY_TAIL_LINES + 1) {
+    return text;
+  }
+  const head = lines.slice(0, DISPLAY_HEAD_LINES);
+  const tail = lines.slice(-DISPLAY_TAIL_LINES);
+  const omitted = lines.length - head.length - tail.length;
+  return [...head, "…（中间省略 " + omitted + " 行；完整输出见 ssh_log_read）", ...tail].join("\n");
+}
+
 function renderResultOutput(payload) {
-  const body = collectResultOutput(payload);
   const detail =
     payload && typeof payload.result === "object" && payload.result !== null ? payload.result : payload;
+  const hasResultField = payload && typeof payload.result === "object" && payload.result !== null;
+  const body = collectResultOutput(payload);
   const exitCode =
     detail?.commandExitCode ?? detail?.exitCode ?? payload?.commandExitCode ?? payload?.exitCode;
   const timedOut = Boolean(detail?.timedOut || payload?.timedOut);
+  const durationMs = detail?.durationMs ?? payload?.durationMs;
+
+  // 只有真的跑过子进程的结果才渲染输出段；元信息类工具（profile_list / vault_status 等）不再出现"（无输出）"噪音。
+  const ranProcess =
+    hasResultField ||
+    typeof payload?.exitCode === "number" ||
+    typeof payload?.commandExitCode === "number" ||
+    Boolean(body);
+  if (!ranProcess) {
+    return "";
+  }
+
   const lines = [];
   if (typeof exitCode === "number") {
     lines.push(timedOut ? "exit=" + exitCode + "（超时中断）" : "exit=" + exitCode);
   } else if (timedOut) {
     lines.push("exit=?(超时中断)");
   }
-  if (body) {
-    lines.push(body);
-  } else {
-    lines.push("（无输出）");
-  }
+  lines.push(body ? clipOutputForDisplay(body) : "（无输出）");
   const truncated = Boolean(detail?.stdoutTruncated || detail?.stderrTruncated);
   if (truncated) {
     lines.push("…（输出已截断，完整内容见 ssh_log_read）");
+  }
+
+  // 关键字段回显进正文：校验结论、实际生效的超时、耗时。
+  const notes = [];
+  if (payload?.verified === true) {
+    notes.push("校验：一致");
+  } else if (payload?.verified === false) {
+    notes.push("校验：不一致 ⚠");
+  }
+  if (typeof payload?.timeoutSeconds === "number") {
+    notes.push("超时：" + payload.timeoutSeconds + " 秒");
+  }
+  if (typeof durationMs === "number" && durationMs > 0) {
+    notes.push("耗时：" + (durationMs >= 1000 ? (durationMs / 1000).toFixed(1) + " 秒" : durationMs + " 毫秒"));
+  }
+  if (notes.length > 0) {
+    lines.push(notes.join("　|　"));
   }
   return lines.join("\n");
 }
@@ -1361,11 +1405,23 @@ ${purpose ? `用途：${purpose}\n` : ""}影响：会在远程服务器上执行
       ...operationResultDetails(result),
     },
   });
+  // 失败时接入与传输一致的失败分类（同时识别中英文错误信息）。
+  let failureKind = null;
+  let failureHint = null;
+  if (result.exitCode !== 0) {
+    const classified = classifyRemoteFailure([result.stderr, result.stdout].filter(Boolean).join("\n"));
+    if (classified) {
+      failureKind = classified.kind;
+      failureHint = classified.hint;
+    }
+  }
   return {
     status: result.exitCode === 0 ? "已执行" : "失败",
     action: "远程命令",
     approval: approvalLabel,
     risk: classification.risk,
+    failureKind,
+    failureHint,
     profile: publicProfile(profile),
     command,
     purpose: purpose || undefined,

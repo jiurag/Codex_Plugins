@@ -46,6 +46,43 @@ const SAFE_READ_COMMANDS = [
   /^(?:node|npm|php|python|python3|go|java|docker-compose|docker)\s+--?version$/,
   /^docker\s+compose\s+(?:ps|config)(?:\s+[^\r\n;&|`$(){}<>]+)*$/,
   /^docker-compose\s+(?:ps|config)(?:\s+[^\r\n;&|`$(){}<>]+)*$/,
+  // 常见只读诊断命令（都不接受会改文件的参数，带 -i/-exec/-delete 的另在下方排除）
+  /^cat(?:\s+[^\r\n;&|`$(){}<>]+)+$/,
+  /^head(?:\s+[^\r\n;&|`$(){}<>]+)+$/,
+  /^tail(?:\s+[^\r\n;&|`$(){}<>]+)+$/,
+  /^grep(?:\s+[^\r\n;&|`$(){}<>]+)+$/,
+  /^egrep(?:\s+[^\r\n;&|`$(){}<>]+)+$/,
+  /^find(?:\s+[^\r\n;&|`$(){}<>]+)+$/,
+  /^wc(?:\s+[^\r\n;&|`$(){}<>]+)*$/,
+  /^md5sum(?:\s+[^\r\n;&|`$(){}<>]+)+$/,
+  /^sha(?:1|256|512)sum(?:\s+[^\r\n;&|`$(){}<>]+)+$/,
+  /^readlink(?:\s+[^\r\n;&|`$(){}<>]+)+$/,
+  /^realpath(?:\s+[^\r\n;&|`$(){}<>]+)+$/,
+  /^file(?:\s+[^\r\n;&|`$(){}<>]+)+$/,
+  /^jq(?:\s+[^\r\n;&|`$(){}<>]+)+$/,
+  /^sort(?:\s+[^\r\n;&|`$(){}<>]+)*$/,
+  /^uniq(?:\s+[^\r\n;&|`$(){}<>]+)*$/,
+  /^cut(?:\s+[^\r\n;&|`$(){}<>]+)+$/,
+  /^tr(?:\s+[^\r\n;&|`$(){}<>]+)+$/,
+  /^diff(?:\s+[^\r\n;&|`$(){}<>]+)+$/,
+  /^cmp(?:\s+[^\r\n;&|`$(){}<>]+)+$/,
+  /^sed\s+-n(?:\s+[^\r\n;&|`$(){}<>]+)+$/,
+  /^lsblk(?:\s+[^\r\n;&|`$(){}<>]+)*$/,
+  /^lsof(?:\s+[^\r\n;&|`$(){}<>]+)*$/,
+  /^journalctl(?:\s+[^\r\n;&|`$(){}<>]+)*$/,
+  /^last(?:\s+[^\r\n;&|`$(){}<>]+)*$/,
+  /^w$/,
+  /^who(?:\s+[^\r\n;&|`$(){}<>]+)*$/,
+  /^which(?:\s+[^\r\n;&|`$(){}<>]+)+$/,
+  /^type\s+[^\r\n;&|`$(){}<>]+$/,
+  /^getent(?:\s+[^\r\n;&|`$(){}<>]+)+$/,
+  /^nproc$/,
+  /^arch$/,
+  /^tty$/,
+  /^hostnamectl(?:\s+status)?$/,
+  /^lsb_release(?:\s+-[a-z]+)*$/,
+  /^stat\s+-c(?:\s+[^\r\n;&|`$(){}<>]+)+$/,
+  /^printenv(?:\s+[^\r\n;&|`$(){}<>]+)*$/,
 ];
 
 const DESTRUCTIVE_PATTERN = /\b(?:rm|rmdir|unlink|shred|dd|mkfs|fdisk|parted|truncate|chmod|chown|chgrp|kill|pkill|killall|shutdown|reboot|halt|poweroff|iptables|ip6tables|nft|ufw|firewall-cmd|systemctl\s+(?:stop|restart|start|disable|enable|mask|unmask)|service\s+\S+\s+(?:stop|restart|start)|docker\s+(?:rm|rmi|stop|kill|prune|system\s+prune)|kubectl\s+delete|sed\s+-i|tee\b|mv\b|cp\b|tar\s+.*\s-x)\b/i;
@@ -108,7 +145,7 @@ export function validatePort(value) {
   return port;
 }
 
-export { DEFAULT_TIMEOUT_SECONDS, READ_ONLY_TIMEOUT_SECONDS };
+export { DEFAULT_TIMEOUT_SECONDS, READ_ONLY_TIMEOUT_SECONDS, classifyRemoteFailure };
 
 export function validateTimeoutSeconds(value, fallback = DEFAULT_TIMEOUT_SECONDS) {
   if (value === undefined || value === null || value === "") {
@@ -191,6 +228,16 @@ export function isSafeReadOnlyCommand(command) {
     return false;
   }
   if (value.includes(" --follow") || value.includes(" -f") || /\btail\s+-[^\s]*f/.test(value)) {
+    return false;
+  }
+  // 这些形式虽然命令本身是只读工具，但能间接改文件或执行命令，必须排除。
+  if (/\bfind\b[^\r\n]*\s-(?:exec|execdir|ok|okdir|delete|fls|fprint|fprintf)\b/.test(value)) {
+    return false;
+  }
+  if (/\bsed\b[^\r\n]*\s-i/.test(value)) {
+    return false;
+  }
+  if (/\b(?:tee|sponge)\b/.test(value)) {
     return false;
   }
   return SAFE_READ_COMMANDS.some((pattern) => pattern.test(value));
@@ -565,14 +612,17 @@ function createPersistentSession(profile) {
 
   function handleStderr(chunk) {
     const text = chunk.toString("utf8");
-    if (current && current.started) {
+    if (chunkEmitter) chunkEmitter({ stream: "stderr", text });
+    // stdout 与 stderr 是两条独立通道，到达顺序没有保证：只写 stderr 的命令
+    // （例如 `ls /nope`）往往在 stdout 的 BEGIN marker 之前就把 stderr 送来了。
+    // 因此只要有命令在跑就必须归集，不能等 current.started 变 true，否则整段错误会被丢弃。
+    if (current && !current.settled) {
       current.stderr.push(text);
-    } else {
-      if (chunkEmitter) chunkEmitter({ stream: "stderr", text });
+      return;
+    }
     stderrBuffer += text;
-      if (stderrBuffer.length > 64 * 1024) {
-        stderrBuffer = stderrBuffer.slice(-8 * 1024);
-      }
+    if (stderrBuffer.length > 64 * 1024) {
+      stderrBuffer = stderrBuffer.slice(-8 * 1024);
     }
   }
 
@@ -1115,17 +1165,20 @@ const TRANSFER_ERROR_RULES = [
   },
   {
     kind: "连接不通",
-    pattern: /connection refused|connection timed out|operation timed out|no route to host|network is unreachable|connection closed|connection reset|broken pipe|disconnected/i,
+    pattern:
+      /connection refused|connection timed out|operation timed out|no route to host|network is unreachable|connection closed|connection reset|broken pipe|disconnected|连接超时|连接被拒绝|连接被重置/i,
     hint: "检查网络、端口、防火墙，或确认服务器在线；也说明常驻会话可能已被中间设备断开。",
   },
   {
     kind: "路径不存在",
-    pattern: /no such file or directory|no such file|not found|cannot stat|does not exist/i,
+    pattern:
+      /no such file or directory|no such file|not found|cannot stat|does not exist|cannot access|无法访问|没有那个文件或目录|找不到/i,
     hint: "核对本地/远端路径；远端目标目录需要事先存在。",
   },
   {
     kind: "权限不足",
-    pattern: /permission denied|access denied|not permitted|operation not permitted/i,
+    pattern:
+      /permission denied|access denied|not permitted|operation not permitted|权限不够|权限不足|拒绝访问/i,
     hint: "检查远端目录/文件的读写权限，或换用有权限的账户。",
   },
   {
@@ -1140,8 +1193,8 @@ const TRANSFER_ERROR_RULES = [
   },
 ];
 
-// 从子进程输出里判断失败类型；返回 null 表示没发现错误。
-function classifyTransferFailure(output) {
+// 从子进程输出里判断失败类型（同时识别中英文错误信息）；返回 null 表示没发现错误。
+function classifyRemoteFailure(output) {
   const text = String(output || "");
   for (const rule of TRANSFER_ERROR_RULES) {
     if (rule.pattern.test(text)) {
@@ -1237,7 +1290,7 @@ function stripSftpMarkers(text) {
 function finalizeTransferResult(raw, { direction, expectedRemote, expectedLocal }) {
   raw = { ...raw, stdout: stripSftpMarkers(raw.stdout), stderr: stripSftpMarkers(raw.stderr) };
   const combined = raw.stdout + "\n" + raw.stderr;
-  const failure = classifyTransferFailure(combined);
+  const failure = classifyRemoteFailure(combined);
   const missingLocal = direction === "download" ? expectedLocal.filter((item) => !fs.existsSync(item)) : [];
   const verified = missingLocal.length === 0;
   const ok = raw.completed && !failure && verified;
