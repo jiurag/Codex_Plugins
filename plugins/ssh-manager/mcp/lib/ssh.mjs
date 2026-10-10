@@ -1140,6 +1140,62 @@ export function startInteractiveShell(profile, handlers = {}) {
     },
   };
 }
+// ===== 自动升级到密钥认证 =====
+// 思路：先用密码连一次把公钥装上去，之后一律走密钥。
+// 好处：不用每次输密码，也不会再弹 Windows 的黑框（askpass）。
+
+function sanitizeKeyName(alias) {
+  return String(alias || "").replace(/[\\/:*?"<>|\s]+/g, "_").slice(0, 60) || "profile";
+}
+
+export function getKeyDirectory() {
+  return path.join(getVaultHome(), "keys");
+}
+
+// 生成（或复用）该服务器的专用密钥对，返回私钥路径与公钥内容。
+export async function ensureKeyPair(alias) {
+  const directory = getKeyDirectory();
+  ensurePrivateDirectory(directory);
+  const privateKeyPath = path.join(directory, sanitizeKeyName(alias) + ".ed25519");
+  const publicKeyPath = privateKeyPath + ".pub";
+  if (!fs.existsSync(privateKeyPath) || !fs.existsSync(publicKeyPath)) {
+    const result = await runProcess(
+      process.env.SSH_MANAGER_KEYGEN_BIN || "ssh-keygen",
+      ["-t", "ed25519", "-N", "", "-C", "codex-ssh-manager:" + String(alias), "-f", privateKeyPath],
+      { env: process.env, timeoutMs: 30_000 },
+    );
+    if (result.exitCode !== 0) {
+      throw new ToolInputError(
+        "生成 SSH 密钥失败：" + String(result.stderr || result.stdout || "").trim().slice(0, 300),
+      );
+    }
+  }
+  return { privateKeyPath, publicKey: fs.readFileSync(publicKeyPath, "utf8").trim() };
+}
+
+export function isValidPublicKey(value) {
+  // 只允许 OpenSSH 常见公钥格式，避免把任意内容写进 authorized_keys。
+  return /^(?:ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|ecdsa-sha2-nistp521|sk-ssh-ed25519@openssh[.]com) [A-Za-z0-9+/=]+(?: [^\r\n]*)?$/.test(
+    String(value || "").trim(),
+  );
+}
+
+// 用密码连接把公钥追加到 ~/.ssh/authorized_keys（幂等）。
+export async function installPublicKey(profile, publicKey, { timeoutSeconds = 20 } = {}) {
+  const key = String(publicKey || "").trim();
+  if (!isValidPublicKey(key)) {
+    throw new ToolInputError("公钥格式无效，已中止安装。");
+  }
+  // 公钥字符集不含单引号，单引号包裹是安全的。
+  const command = [
+    "mkdir -p ~/.ssh && chmod 700 ~/.ssh",
+    "touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys",
+    "grep -qxF '" + key + "' ~/.ssh/authorized_keys || echo '" + key + "' >> ~/.ssh/authorized_keys",
+    "echo SSH_MANAGER_KEY_INSTALLED",
+  ].join(" && ");
+  return runRemoteCommand(profile, command, { timeoutSeconds });
+}
+
 export async function testConnection(profile, { timeoutSeconds } = {}) {
   return runRemoteCommand(profile, "printf 'SSH_MANAGER_OK\\n'", { timeoutSeconds });
 }

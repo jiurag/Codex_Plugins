@@ -55,6 +55,10 @@ if (args.includes("-tt")) {
       }
       return;
     }
+    if (body.includes("SSH_MANAGER_KEY_INSTALLED")) {
+      process.stdout.write("SSH_MANAGER_KEY_INSTALLED\\n");
+      return;
+    }
     if (body.includes("FAIL_ME")) {
       process.stdout.write("partial before failure\\n");
       process.stderr.write("simulated failure reason\\n");
@@ -237,6 +241,8 @@ async function main() {
 
   let elicitationCount = 0;
   let approvalDecision = "confirm";
+  // 默认关闭"自动转密钥"，主流程用例聚焦密码方式；末尾另有专门用例覆盖自动升级。
+  let preferKeyAuth = false;
   const elicitationSchemaViolations = [];
   const approvalMessageViolations = [];
   let lastApprovalMessage = "";
@@ -261,6 +267,7 @@ async function main() {
           defaultRemoteDir: "/srv/app",
           hostKeyPolicy: "accept-new",
           description: "smoke test",
+          preferKeyAuth,
         },
       };
     }
@@ -271,7 +278,8 @@ async function main() {
   assert.deepEqual(elicitationSchemaViolations, [], "elicitation 表单必须符合 Codex 受限 schema 子集");
   assert.equal(saved._meta.status, "已保存");
   assert.equal(saved._meta.profile.password, undefined);
-  assert.equal(saved._meta.profile.hasPassword, true);
+  assert.equal(saved._meta.profile.hasPassword, true, "关闭自动升级时应保留密码认证");
+  assert.equal(saved._meta.keyAuthUpgrade, null, "关闭自动升级时不应尝试升级");
   assert.equal(elicitationCount, 1);
 
   const rawVault = fs.readFileSync(path.join(vaultHome, "vault.json"), "utf8");
@@ -471,6 +479,16 @@ async function main() {
   assert.equal(stillThere._meta.count, 1);
 
   assert.deepEqual(approvalMessageViolations, [], "确认表单 message 必须符合可视预算");
+
+  // ===== 自动转密钥认证 =====
+  preferKeyAuth = true;
+  const upgraded = await client.tool("ssh_profile_upsert", { alias: "密钥升级测试" });
+  assert.equal(upgraded._meta.status, "已保存");
+  assert.equal(upgraded._meta.profile.authMethod, "key", "应自动改成密钥认证");
+  assert.equal(upgraded._meta.profile.hasPassword, false, "升级成功后应清除密码");
+  assert.equal(upgraded._meta.keyAuthUpgrade?.ok, true, "升级结果应为成功：" + JSON.stringify(upgraded._meta.keyAuthUpgrade));
+  assert.ok(fs.existsSync(upgraded._meta.profile.privateKeyPath), "私钥文件应已生成");
+  preferKeyAuth = false;
 
   // 日志系统：应生成日志文件、内容脱敏、且能通过工具读回
   const logDir = path.join(vaultHome, "logs");

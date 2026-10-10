@@ -54,11 +54,14 @@ import {
   READ_ONLY_TIMEOUT_SECONDS,
   DEFAULT_TIMEOUT_SECONDS,
   classifyRemoteFailure,
+  ensureKeyPair,
+  installPublicKey,
+  getKeyDirectory,
   validateUsername,
 } from "./lib/ssh.mjs";
 
 const SERVER_NAME = "Codex SSH 管理器";
-const SERVER_VERSION = "0.2.2";
+const SERVER_VERSION = "0.3.0";
 const ELICITATION_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_MESSAGE_LENGTH = 20_000;
 // Codex 的 elicitation 面板高度 = message 换行后的行数 + 选项区高度
@@ -960,9 +963,57 @@ function profileUpsertSchema(existing, args) {
         default: defaults.description,
         maxLength: 500,
       },
+      preferKeyAuth: {
+        type: "boolean",
+        title: "保存后自动改用密钥认证（会写入服务器，取消勾选可只保存密码）",
+        description:
+          "安全说明：勾选后插件会用你填的密码连一次服务器，把你的公钥追加进 ~/.ssh/authorized_keys，" +
+          "之后该账户可用这把密钥免密登录，同时本机保存的密码会被清除。" +
+          "这会实际修改服务器上的授权文件；如需撤销，删除服务器上以 codex-ssh-manager: 开头的那一行即可。" +
+          "不同意就取消勾选，插件只保存密码、不改服务器。",
+        default: true,
+      },
     },
     required: ["approve", "alias", "host", "port", "username", "authMethod"],
   };
+}
+
+// 把一台"密码认证"的服务器升级成"密钥认证"：
+//  1) 生成（或复用）该服务器的专用密钥对
+//  2) 用密码连一次，把公钥追加进 ~/.ssh/authorized_keys
+//  3) 用密钥再连一次验证
+// 任一步失败都保留原来的密码认证，不影响已经保存的配置。
+async function tryUpgradeToKeyAuth(profile) {
+  try {
+    const key = await ensureKeyPair(profile.alias);
+    const install = await installPublicKey(profile, key.publicKey, { timeoutSeconds: 20 });
+    if (install.exitCode !== 0 || !String(install.stdout || "").includes("SSH_MANAGER_KEY_INSTALLED")) {
+      return {
+        ok: false,
+        reason: "公钥安装失败",
+        detail: String(install.stderr || install.stdout || "").trim().slice(0, 300),
+      };
+    }
+    const verify = await testConnection(
+      {
+        ...profile,
+        authMethod: "key",
+        privateKeyPath: key.privateKeyPath,
+        privateKeyPassphrase: "",
+      },
+      { timeoutSeconds: 20 },
+    );
+    if (verify.exitCode !== 0) {
+      return {
+        ok: false,
+        reason: "密钥验证失败",
+        detail: String(verify.stderr || verify.stdout || "").trim().slice(0, 300),
+      };
+    }
+    return { ok: true, privateKeyPath: key.privateKeyPath, publicKey: key.publicKey };
+  } catch (error) {
+    return { ok: false, reason: "自动升级异常", detail: String(error?.message || error).slice(0, 300) };
+  }
 }
 
 async function handleProfileUpsert(args) {
@@ -1059,6 +1110,39 @@ async function handleProfileUpsert(args) {
     delete vault.profiles[previousAlias];
   }
   vault.profiles[alias] = nextProfile;
+
+  // 密码认证 + 用户同意 → 用密码连一次装公钥，成功后自动改为密钥认证。
+  let keyAuthUpgrade = null;
+  const preferKeyAuth = content.preferKeyAuth === undefined ? true : isTrue(content.preferKeyAuth);
+  if (authMethod === "password" && password && preferKeyAuth) {
+    keyAuthUpgrade = await tryUpgradeToKeyAuth(nextProfile);
+    if (keyAuthUpgrade.ok) {
+      nextProfile.authMethod = "key";
+      nextProfile.privateKeyPath = keyAuthUpgrade.privateKeyPath;
+      nextProfile.privateKeyPassphrase = "";
+      // 不再需要密码了：清掉它更安全，也避免以后误用密码通道。
+      nextProfile.password = "";
+    }
+    // 这一步改过服务器上的授权文件，必须留下可追溯的审计记录。
+    audit(vault, {
+      alias,
+      action: "自动升级密钥认证",
+      approved: "用户已在表单中同意",
+      result: keyAuthUpgrade.ok ? "成功" : "失败",
+      summary: keyAuthUpgrade.ok
+        ? `已在 ${host} 追加公钥到 ~/.ssh/authorized_keys，并改用密钥认证`
+        : `未升级，保留密码认证：${keyAuthUpgrade.reason || "原因未知"}`,
+      details: {
+        host,
+        port,
+        username,
+        privateKeyPath: keyAuthUpgrade.privateKeyPath || null,
+        publicKey: keyAuthUpgrade.publicKey || null,
+        reason: keyAuthUpgrade.reason || null,
+        detail: keyAuthUpgrade.detail || null,
+      },
+    });
+  }
   audit(vault, {
     alias,
     action: existing ? "配置更新" : "配置添加",
@@ -1079,6 +1163,26 @@ async function handleProfileUpsert(args) {
     status: "已保存",
     action: existing ? "配置更新" : "配置添加",
     profile: publicProfile(nextProfile),
+    // 自动升级密钥认证的结果（仅密码认证时出现）
+    keyAuthUpgrade: keyAuthUpgrade
+      ? {
+          ok: Boolean(keyAuthUpgrade.ok),
+          privateKeyPath: keyAuthUpgrade.privateKeyPath || null,
+          keyDirectory: getKeyDirectory(),
+          reason: keyAuthUpgrade.reason || null,
+          detail: keyAuthUpgrade.detail || null,
+          securityNotice:
+            "本次操作修改了服务器上的授权文件：公钥已追加到 " +
+            username +
+            "@" +
+            host +
+            " 的 ~/.ssh/authorized_keys（注释以 codex-ssh-manager: 开头）。" +
+            "本机保存的密码已清除。如需撤销授权，请在服务器上删除该行，或改用其他认证方式。",
+          summary: keyAuthUpgrade.ok
+            ? "已自动改用密钥认证，之后连接不再需要密码，也不会再弹黑框。"
+            : "自动升级未成功，已保留密码认证：" + (keyAuthUpgrade.reason || "原因未知"),
+        }
+      : null,
   };
 }
 
