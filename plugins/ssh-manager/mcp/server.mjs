@@ -61,7 +61,7 @@ import {
 } from "./lib/ssh.mjs";
 
 const SERVER_NAME = "Codex SSH 管理器";
-const SERVER_VERSION = "0.3.0";
+const SERVER_VERSION = "0.3.1";
 const ELICITATION_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_MESSAGE_LENGTH = 20_000;
 // Codex 的 elicitation 面板高度 = message 换行后的行数 + 选项区高度
@@ -505,6 +505,12 @@ function displayTextFor(payload) {
       }
       if (entry.error) {
         parts.push("  错误: " + entry.error);
+      }
+      if (typeof entry.exitCode === "number") {
+        parts.push("  退出码: " + entry.exitCode);
+      }
+      if (typeof entry.commandExitCode === "number") {
+        parts.push("  部署命令退出码: " + entry.commandExitCode);
       }
       if (entry.stdout) {
         parts.push("  stdout: " + String(entry.stdout).trim().split("\n").slice(0, 6).join(" / "));
@@ -1524,7 +1530,10 @@ ${purpose ? `用途：${purpose}\n` : ""}影响：会在远程服务器上执行
   let failureKind = null;
   let failureHint = null;
   if (result.exitCode !== 0) {
-    const classified = classifyRemoteFailure([result.stderr, result.stdout].filter(Boolean).join("\n"));
+    const classified = classifyRemoteFailure(
+      [result.stderr, result.stdout].filter(Boolean).join("\n"),
+      result.exitCode,
+    );
     if (classified) {
       failureKind = classified.kind;
       failureHint = classified.hint;
@@ -1708,7 +1717,18 @@ ${postCommand ? `部署后命令：\n${limitPreviewLines(postCommand, 4)}\n` : "
     if (failedStep) {
       deployFailure = classifyRemoteFailure(
         [failedStep.stderr, failedStep.stdout].filter(Boolean).join("\n"),
+        failedStep.exitCode,
       );
+      if (deployFailure) {
+        const stepName = uploadResult.exitCode !== 0 ? "上传" : "部署后命令";
+        deployFailure = {
+          kind: deployFailure.kind,
+          hint:
+            stepName + "退出码 " + failedStep.exitCode + "。" +
+            deployFailure.hint +
+            (stepName === "部署后命令" ? "可先用 ssh_exec 单独执行该命令排查。" : ""),
+        };
+      }
     }
   }
   audit(vault, {

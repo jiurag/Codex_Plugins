@@ -91,6 +91,25 @@ const SAFE_READ_COMMANDS = [
   /^echo(?:\s+[^\r\n;&|`$(){}<>]+)*$/,
   /^printf(?:\s+[^\r\n;&|`$(){}<>]+)+$/,
   /^sleep\s+\d+$/,
+  /^exit(?:\s+\d+)?$/,
+  /^seq(?:\s+[^\r\n;&|`$(){}<>]+)+$/,
+  /^nl(?:\s+[^\r\n;&|`$(){}<>]+)*$/,
+  /^basename(?:\s+[^\r\n;&|`$(){}<>]+)+$/,
+  /^dirname(?:\s+[^\r\n;&|`$(){}<>]+)+$/,
+  /^env$/,
+  /^test\s+[^\r\n;&|`$(){}<>]+$/,
+  /^yq(?:\s+[^\r\n;&|`$(){}<>]+)+$/,
+  /^groups(?:\s+\S+)?$/,
+  /^users$/,
+  /^tac(?:\s+[^\r\n;&|`$(){}<>]+)+$/,
+  /^comm(?:\s+[^\r\n;&|`$(){}<>]+)+$/,
+  /^paste(?:\s+[^\r\n;&|`$(){}<>]+)+$/,
+  /^fold(?:\s+[^\r\n;&|`$(){}<>]+)*$/,
+  /^column(?:\s+[^\r\n;&|`$(){}<>]+)*$/,
+  /^strings(?:\s+[^\r\n;&|`$(){}<>]+)+$/,
+  /^gzip\s+-l(?:\s+[^\r\n;&|`$(){}<>]+)+$/,
+  /^unzip\s+-l(?:\s+[^\r\n;&|`$(){}<>]+)+$/,
+  /^tar\s+-t(?:\s+[^\r\n;&|`$(){}<>]+)+$/,
 ];
 
 const DESTRUCTIVE_PATTERN = /\b(?:rm|rmdir|unlink|shred|dd|mkfs|fdisk|parted|truncate|chmod|chown|chgrp|kill|pkill|killall|shutdown|reboot|halt|poweroff|iptables|ip6tables|nft|ufw|firewall-cmd|systemctl\s+(?:stop|restart|start|disable|enable|mask|unmask)|service\s+\S+\s+(?:stop|restart|start)|docker\s+(?:rm|rmi|stop|kill|prune|system\s+prune)|kubectl\s+delete|sed\s+-i|tee\b|mv\b|cp\b|tar\s+.*\s-x)\b/i;
@@ -227,8 +246,8 @@ export function connectionTarget(profile) {
   return `${profile.username}@${profile.host}`;
 }
 
-export function isSafeReadOnlyCommand(command) {
-  const value = requireString(command, "command", { maxLength: SAFE_COMMAND_MAX_LENGTH }).trim();
+// 判定"单段"命令是否只读（不含命令连接符）。
+function isReadOnlySegment(value) {
   if (value.length === 0 || value.includes("\u0000")) {
     return false;
   }
@@ -266,6 +285,20 @@ export function isSafeReadOnlyCommand(command) {
     return false;
   }
   return SAFE_READ_COMMANDS.some((pattern) => pattern.test(normalized));
+}
+
+// 整条命令判定：按 ; && || | 拆段，全部只读才算只读。
+// 只要有一段是变更（例如 `echo a; rm -rf x`），整条就按变更处理。
+export function isSafeReadOnlyCommand(command) {
+  const value = requireString(command, "command", { maxLength: SAFE_COMMAND_MAX_LENGTH }).trim();
+  if (value.length === 0 || value.includes("\u0000")) {
+    return false;
+  }
+  const segments = value.split(/\s*(?:&&|\|\||;|\|)\s*/).map((item) => item.trim()).filter(Boolean);
+  if (segments.length === 0) {
+    return false;
+  }
+  return segments.every((segment) => isReadOnlySegment(segment));
 }
 
 export function isDestructiveCommand(command) {
@@ -1288,14 +1321,42 @@ const TRANSFER_ERROR_RULES = [
 ];
 
 // 从子进程输出里判断失败类型（同时识别中英文错误信息）；返回 null 表示没发现错误。
-function classifyRemoteFailure(output) {
+// 常见特殊退出码 → 有意义的分类（stdout/stderr 都没有线索时兜底）。
+function classifyByExitCode(exitCode) {
+  const code = Number(exitCode);
+  if (!Number.isInteger(code) || code === 0) {
+    return null;
+  }
+  if (code === 126) {
+    return { kind: "无法执行", hint: "命令没有执行权限，或解释器不可用。" };
+  }
+  if (code === 127) {
+    return { kind: "命令不存在", hint: "检查命令名是否写错，或该命令未安装。" };
+  }
+  if (code === 130) {
+    return { kind: "被用户中断", hint: "命令收到 Ctrl+C 而中断。" };
+  }
+  if (code === 137) {
+    return { kind: "被强制终止", hint: "常见于内存不足（OOM）被系统杀掉。" };
+  }
+  if (code === 255) {
+    return { kind: "连接或认证失败", hint: "SSH 连接或认证被拒绝。" };
+  }
+  return {
+    kind: "命令返回非 0（退出码 " + code + "）",
+    hint: "命令执行了但返回失败；可先用同样命令手动排查，或查看完整输出。",
+  };
+}
+
+function classifyRemoteFailure(output, exitCode) {
   const text = String(output || "");
   for (const rule of TRANSFER_ERROR_RULES) {
     if (rule.pattern.test(text)) {
       return { kind: rule.kind, hint: rule.hint };
     }
   }
-  return null;
+  // 输出里没有线索（例如命令只用退出码表达失败）时，用退出码给个兜底说明。
+  return classifyByExitCode(exitCode);
 }
 
 // 交互式执行一组 sftp 命令：每条命令后跟一个 !echo 标记，标记全部出现即视为执行完毕。
