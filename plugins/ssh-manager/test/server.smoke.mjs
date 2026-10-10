@@ -198,6 +198,8 @@ async function main() {
     SSH_MANAGER_HOME: vaultHome,
     SSH_MANAGER_SSH_BIN: fakeSsh,
     SSH_MANAGER_SFTP_BIN: fakeSftp,
+    // 测试聚焦一次性路径；常驻复用的降级逻辑与传输层一致。
+    SSH_MANAGER_EXEC_REUSE: "0",
   };
   const child = spawn(process.execPath, [serverPath], {
     cwd: pluginRoot,
@@ -486,6 +488,13 @@ async function main() {
   assert.match(logReadText, /stdout/, "ssh_log_read 的渲染里应带出 stdout");
   const failedLogs = await client.tool("ssh_log_read", { limit: 20, onlyErrors: true });
   assert.equal(failedLogs._meta.onlyErrors, true);
+  const fullLogs = await client.tool("ssh_log_read", { limit: 5, full: true });
+  assert.equal(fullLogs._meta.full, true);
+  const sinceLogs = await client.tool("ssh_log_read", { limit: 5, since: "1h" });
+  assert.equal(sinceLogs._meta.since, "1h");
+  assert.ok(sinceLogs._meta.returned > 0, "since 过滤后仍应返回最近日志");
+  const oldLogs = await client.tool("ssh_log_read", { limit: 5, since: "1999-01-01T00:00:00Z" });
+  assert.ok(oldLogs._meta.returned > fullLogs._meta.returned - 1, "极早的 since 应返回全部");
 
 
   client.close();

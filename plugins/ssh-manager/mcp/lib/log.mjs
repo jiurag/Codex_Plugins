@@ -16,8 +16,13 @@ import { getVaultHome, ensurePrivateDirectory } from "./vault.mjs";
 const LOG_DIR_NAME = "logs";
 const LOG_FILE_PREFIX = "ssh-manager";
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
+// 全部日志文件的总大小上限，超出后从最旧的开始删。
+const MAX_TOTAL_BYTES = 50 * 1024 * 1024;
 const KEEP_DAYS = 7;
-const MAX_FIELD_CHARS = 4000;
+// 写盘时的单字段上限（比读取默认值大，便于 full: true 回溯）。
+const MAX_FIELD_CHARS = 16000;
+// 读取时 stdout/stderr 默认截断长度。
+const READ_FIELD_CHARS = 2000;
 const SECRET_KEY_PATTERN = /pass(word|phrase)?|secret|token|credential|privatekey|api[-_]?key/i;
 
 export function getLogDirectory() {
@@ -61,19 +66,54 @@ function cleanupOldLogs(directory) {
   } catch {
     return;
   }
+  const survivors = [];
   for (const entry of entries) {
     if (!entry.isFile() || !entry.name.startsWith(LOG_FILE_PREFIX)) {
       continue;
     }
     const full = path.join(directory, entry.name);
     try {
-      if (fs.statSync(full).mtimeMs < cutoff) {
+      const stat = fs.statSync(full);
+      if (stat.mtimeMs < cutoff) {
         fs.rmSync(full, { force: true });
+        continue;
       }
+      survivors.push({ full, mtimeMs: stat.mtimeMs, size: stat.size });
     } catch {
       // 清理失败可以忽略。
     }
   }
+  // 总量仍超限时，从最旧的开始继续删。
+  let total = survivors.reduce((sum, item) => sum + item.size, 0);
+  survivors.sort((left, right) => left.mtimeMs - right.mtimeMs);
+  for (const item of survivors) {
+    if (total <= MAX_TOTAL_BYTES) {
+      break;
+    }
+    try {
+      fs.rmSync(item.full, { force: true });
+      total -= item.size;
+    } catch {
+      // 忽略
+    }
+  }
+}
+
+// 支持 ISO 时间戳或相对时间（如 30m / 2h / 1d）。
+function parseSince(value) {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+  const text = String(value).trim();
+  const relative = /^(\d+)\s*(m|h|d)$/i.exec(text);
+  if (relative) {
+    const amount = Number(relative[1]);
+    const unit = relative[2].toLowerCase();
+    const factor = unit === "m" ? 60_000 : unit === "h" ? 3_600_000 : 86_400_000;
+    return Date.now() - amount * factor;
+  }
+  const parsed = Date.parse(text);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 // 追加一条日志。失败时静默忽略——日志不能把主流程带崩。
@@ -133,8 +173,9 @@ export function getLogStatus() {
 }
 
 // 读取最近的日志条目：先按文件从新到旧，再倒序取需要的条数。
-export function readRecentLogs({ limit = 50, onlyErrors = false, tool = null } = {}) {
+export function readRecentLogs({ limit = 50, onlyErrors = false, tool = null, since = null, full = false } = {}) {
   const safeLimit = Math.min(Math.max(Number.parseInt(String(limit ?? 50), 10) || 50, 1), 500);
+  const sinceMs = parseSince(since);
   const files = listLogFiles().reverse();
   const collected = [];
   for (const file of files) {
@@ -161,7 +202,13 @@ export function readRecentLogs({ limit = 50, onlyErrors = false, tool = null } =
       if (tool && parsed.name !== tool) {
         continue;
       }
-      collected.push(parsed);
+      if (sinceMs !== null) {
+        const stamp = Date.parse(parsed.ts || "");
+        if (!Number.isFinite(stamp) || stamp < sinceMs) {
+          continue;
+        }
+      }
+      collected.push(full ? parsed : clipLogEntry(parsed));
       if (collected.length >= safeLimit) {
         break;
       }
@@ -173,6 +220,20 @@ export function readRecentLogs({ limit = 50, onlyErrors = false, tool = null } =
     returned: collected.length,
     onlyErrors: Boolean(onlyErrors),
     toolFilter: tool || null,
+    since: since || null,
+    full: Boolean(full),
     entries: collected,
   };
+}
+
+// 默认读取时对长输出做二次截断；full: true 时原样返回。
+function clipLogEntry(entry) {
+  const output = { ...entry };
+  for (const key of ["stdout", "stderr", "uploadStdout", "uploadStderr", "commandStdout", "commandStderr"]) {
+    const value = output[key];
+    if (typeof value === "string" && value.length > READ_FIELD_CHARS) {
+      output[key] = value.slice(0, READ_FIELD_CHARS) + "…（已截断，用 full: true 查看完整内容）";
+    }
+  }
+  return output;
 }

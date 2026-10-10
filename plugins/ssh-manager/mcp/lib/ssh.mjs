@@ -9,6 +9,10 @@ import { ensurePrivateDirectory, expandHome, getVaultHome } from "./vault.mjs";
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = path.resolve(MODULE_DIR, "..", "..");
 const DEFAULT_TIMEOUT_SECONDS = 120;
+// 只读诊断类命令给更短的默认超时，避免卡在没响应的连接上。
+const READ_ONLY_TIMEOUT_SECONDS = 30;
+// 常驻 SSH 会话空闲超过这个时间就回收，避免复用已经失效的连接。
+const PERSISTENT_IDLE_MS = 5 * 60 * 1000;
 const MAX_TIMEOUT_SECONDS = 900;
 const MAX_CAPTURE_BYTES = 512 * 1024;
 const SAFE_COMMAND_MAX_LENGTH = 20_000;
@@ -103,6 +107,8 @@ export function validatePort(value) {
   }
   return port;
 }
+
+export { DEFAULT_TIMEOUT_SECONDS, READ_ONLY_TIMEOUT_SECONDS };
 
 export function validateTimeoutSeconds(value, fallback = DEFAULT_TIMEOUT_SECONDS) {
   if (value === undefined || value === null || value === "") {
@@ -580,6 +586,10 @@ function createPersistentSession(profile) {
     profile,
     pid: child.pid,
     startedAt: new Date(startedAt).toISOString(),
+    lastUsedAt: Date.now(),
+    idleMs() {
+      return Date.now() - this.lastUsedAt;
+    },
     exec(command, options = {}) {
       const run = () => new Promise((resolve, reject) => {
         if (closed || !child.stdin.writable) {
@@ -698,10 +708,24 @@ export function closePersistentSession(profileOrAlias) {
 export async function runRemoteCommandPersistent(profile, command, options = {}) {
   const key = persistentSessionKey(profile);
   let session = persistentSessions.get(key);
+  // 空闲太久的会话可能已被中间设备断开，主动回收重建。
+  if (
+    session &&
+    session.isAlive() &&
+    typeof session.idleMs === "function" &&
+    session.idleMs() > PERSISTENT_IDLE_MS
+  ) {
+    session.close();
+    persistentSessions.delete(key);
+    session = null;
+  }
   if (!session || !session.isAlive()) {
     session = createPersistentSession(profile);
   }
-  return session.exec(command, options);
+  session.lastUsedAt = Date.now();
+  const result = await session.exec(command, options);
+  session.lastUsedAt = Date.now();
+  return result;
 }
 
 const persistentSftpSessions = new Map();

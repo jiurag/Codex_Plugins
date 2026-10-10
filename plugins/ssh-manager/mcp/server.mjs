@@ -49,11 +49,13 @@ import {
   validateRemotePath,
   validateSecret,
   validateTimeoutSeconds,
+  READ_ONLY_TIMEOUT_SECONDS,
+  DEFAULT_TIMEOUT_SECONDS,
   validateUsername,
 } from "./lib/ssh.mjs";
 
 const SERVER_NAME = "Codex SSH 管理器";
-const SERVER_VERSION = "0.1.7";
+const SERVER_VERSION = "0.1.8";
 const ELICITATION_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_MESSAGE_LENGTH = 20_000;
 // Codex 的 elicitation 面板高度 = message 换行后的行数 + 选项区高度
@@ -287,6 +289,11 @@ function toolResult(id, payload, { isError = false } = {}) {
   }
   if (failureHint) {
     parts.push("建议：" + failureHint);
+  }
+  const failedNow =
+    isError || Boolean(failureKind) || payload?.status === "失败" || payload?.status === "部分失败";
+  if (failedNow && payload?.retryable === false) {
+    parts.push("提示：这是变更类操作，失败后不要自动重试。");
   }
   const rendered = renderResultOutput(payload);
   if (rendered) {
@@ -599,6 +606,27 @@ async function transferWithFallback(profile, runPersistent, runOneshot) {
   }
   closePersistentSftpSession(profile);
   return runOneshot();
+}
+
+// exec 优先复用常驻 SSH 会话（省去每次握手），失败则丢弃并降级到一次性连接。
+// 常驻会话退出码来自远端 $?，与一次性连接等价。
+// 需要关闭复用时设置 SSH_MANAGER_EXEC_REUSE=0。
+const EXEC_REUSE_PERSISTENT = process.env.SSH_MANAGER_EXEC_REUSE !== "0";
+
+async function execWithFallback(profile, command, options) {
+  if (!EXEC_REUSE_PERSISTENT) {
+    return runRemoteCommand(profile, command, options);
+  }
+  const hadSession = hasPersistentSession(profile);
+  try {
+    return await runRemoteCommandPersistent(profile, command, options);
+  } catch {
+    // 常驻会话可能已被中间设备断开：丢掉它，用一次性连接重试一次。
+    if (hadSession) {
+      closePersistentSession(profile);
+    }
+    return runRemoteCommand(profile, command, options);
+  }
 }
 
 async function askApproval({ title, message, details }) {
@@ -1202,8 +1230,12 @@ async function handleExec(args) {
   const profile = resolveProfile(vault, args.alias);
   const command = requireString(args.command, "command", { maxLength: MAX_MESSAGE_LENGTH });
   const purpose = requireString(args.purpose, "purpose", { maxLength: 1000 });
-  const timeoutSeconds = validateTimeoutSeconds(args.timeoutSeconds);
   const classification = explainCommandClassification(command);
+  // 超时分层：只读诊断类默认 30 秒，变更类默认 120 秒；显式传入时以传入为准。
+  const timeoutSeconds = validateTimeoutSeconds(
+    args.timeoutSeconds,
+    classification.approvalRequired ? DEFAULT_TIMEOUT_SECONDS : READ_ONLY_TIMEOUT_SECONDS,
+  );
 
   const modeDecision = classification.approvalRequired ? currentApprovalDecision() : "allow";
   if (modeDecision === "block") {
@@ -1238,10 +1270,7 @@ ${purpose ? `用途：${purpose}\n` : ""}影响：会在远程服务器上执行
     : modeDecision === "allow"
       ? "会话免确认"
       : "已同意";
-  const usingPersistent = hasPersistentSession(profile);
-  const result = usingPersistent
-    ? await runRemoteCommandPersistent(profile, command, { timeoutSeconds })
-    : await runRemoteCommand(profile, command, { timeoutSeconds });
+  const result = await execWithFallback(profile, command, { timeoutSeconds });
   audit(vault, {
     alias: profile.alias,
     action: "远程命令",
@@ -1264,7 +1293,10 @@ ${purpose ? `用途：${purpose}\n` : ""}影响：会在远程服务器上执行
     profile: publicProfile(profile),
     command,
     purpose: purpose || undefined,
-    connectionMode: usingPersistent ? "持久连接" : "短连接",
+    connectionMode: result.connectionMode || "短连接",
+    // 重试语义分级：只读命令可安全重试，变更/破坏性操作失败后不要自动重试。
+    retryable: !classification.approvalRequired,
+    timeoutSeconds,
     result,
   };
 }
@@ -1622,6 +1654,8 @@ async function handleToolCall(id, params) {
           limit: args.limit,
           onlyErrors: Boolean(args.onlyErrors),
           tool: toolFilter,
+          since: args.since,
+          full: Boolean(args.full),
         });
         return toolResult(id, {
           status: "正常",
@@ -1634,6 +1668,8 @@ async function handleToolCall(id, params) {
           returned: logs.returned,
           onlyErrors: logs.onlyErrors,
           toolFilter: logs.toolFilter,
+          since: logs.since,
+          full: logs.full,
           entries: logs.entries,
         });
       }
@@ -1810,6 +1846,15 @@ const TOOLS = [
         tool: {
           type: "string",
           description: "只返回指定工具的日志，例如 ssh_upload。",
+        },
+        since: {
+          type: "string",
+          description: "只返回该时间之后的日志。支持 ISO 时间戳或相对时间，例如 30m、2h、1d。",
+        },
+        full: {
+          type: "boolean",
+          default: false,
+          description: "为 true 时返回未截断的 stdout/stderr（默认会截断到 2000 字符）。",
         },
       },
     },

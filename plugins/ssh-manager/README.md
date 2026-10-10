@@ -27,6 +27,14 @@ ai
 - 例如：“正在检查 `生产服务器` 的 Nginx 状态。”
 - 例如：“正在把 `E:\project\dist` 部署到 `生产服务器:/srv/app`。”
 
+## 连接复用与超时
+
+- `ssh_exec` 默认复用常驻 SSH 会话，省去每次握手（实测单次建连 200ms~4.6s）。
+  - 常驻会话空闲超过 5 分钟自动回收；会话异常时自动丢弃并用一次性连接重试一次。
+  - 需要关闭复用时设置环境变量 `SSH_MANAGER_EXEC_REUSE=0`。
+- 超时分层：只读诊断命令默认 30 秒，变更类默认 120 秒；显式传 `timeoutSeconds` 时以传入为准，实际生效值会在返回里回显。
+- 重试分级：返回里的 `retryable` 标明失败后能否安全重试（只读为 true，变更/破坏性为 false）。
+
 ## 功能
 
 - 保存多个 SSH 服务器配置，按别名调用。
@@ -50,7 +58,7 @@ ai
 | `ssh_session_register` | 注册可切换的 SSH 操作会话 | 否 |
 | `ssh_set_approval_mode` | 切换默认执行、只读免确认或会话免确认 | 否 |
 | `ssh_operation_dashboard` | 打开/停止 SSH 实时操作面板 | 否 |
-| `ssh_log_read` | 读取本地操作日志（JSONL、已脱敏、含原始输出） | 否 |
+| `ssh_log_read` | 读取本地操作日志（JSONL、已脱敏、含原始输出；支持 `since` 时间过滤与 `full` 取消截断） | 否 |
 | `ssh_terminal_open` | 打开持续连接的交互式 SSH 终端 | 默认确认一次 |
 | `ssh_terminal_write` | 向交互式终端发送输入 | 打开后直接发送 |
 | `ssh_terminal_read` | 读取交互式终端新输出 | 否 |
