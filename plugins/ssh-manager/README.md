@@ -115,6 +115,11 @@ codex plugin add ssh-manager@personal
 
 ## 操作模式
 
+- `会话免确认` 现在会**持久化**：Codex 因 cwd / 审批策略 / 权限变化重建 MCP 进程后，只要距上次操作在 **30 分钟**内就会自动恢复，不会再"聊几轮又弹确认"。
+- 超过 30 分钟窗口自动回到「默认执行」；手动切回「默认执行」后也不会再被恢复。
+- 窗口长度可用环境变量 `SSH_MANAGER_SESSION_AUTO_TTL_MINUTES` 调整（默认 30）。
+- `ssh_vault_status` 会返回 `sessionAutoRestored` / `sessionAutoExpiresAt`，便于确认当前状态。
+
 - 默认执行：只读命令无需询问，敏感操作仍确认；确认时可直接选择“确认并开启本次会话免询问”。
 - 只读免确认：只执行只读命令，变更操作会被阻止。
 - 会话免确认：用户明确要求后，本次任务内所有操作直接执行。

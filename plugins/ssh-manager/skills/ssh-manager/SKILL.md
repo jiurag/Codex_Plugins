@@ -121,6 +121,8 @@ Windows OpenSSH 不支持 `ControlMaster`，这里分别保持常驻 OpenSSH 远
 
 切换模式时调用 `ssh_set_approval_mode`。不要主动把模式切换为 `会话免确认`，必须由用户明确要求。
 
+「会话免确认」会持久化并带 30 分钟窗口：MCP 进程被重建后仍会自动恢复，超时或用户手动切回默认则失效。可用 `ssh_vault_status` 查看 `sessionAutoRestored` / `sessionAutoExpiresAt`。
+
 ## 只读检查流程
 
 ```text
