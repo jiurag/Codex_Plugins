@@ -10,6 +10,7 @@ import {
   stopDashboard,
 } from "./lib/dashboard.mjs";
 import { createTerminalController } from "./lib/terminal.mjs";
+import { appendLog, readRecentLogs, getLogDirectory } from "./lib/log.mjs";
 import {
   appendAudit,
   getKeyProtection,
@@ -52,7 +53,7 @@ import {
 } from "./lib/ssh.mjs";
 
 const SERVER_NAME = "Codex SSH 管理器";
-const SERVER_VERSION = "0.1.4";
+const SERVER_VERSION = "0.1.5";
 const ELICITATION_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_MESSAGE_LENGTH = 20_000;
 // Codex 的 elicitation 面板高度 = message 换行后的行数 + 选项区高度
@@ -135,6 +136,50 @@ function request(method, params, timeoutMs = ELICITATION_TIMEOUT_MS) {
   });
 }
 
+// 当前正在执行的工具调用，供 toolResult 落日志用。
+let currentToolCall = null;
+
+function summarizeForLog(payload) {
+  if (!payload || typeof payload !== "object") {
+    return {};
+  }
+  const detail =
+    typeof payload.result === "object" && payload.result !== null ? payload.result : payload;
+  return {
+    status: payload.status,
+    action: payload.action,
+    alias: payload.profile?.alias,
+    host: payload.profile?.host,
+    port: payload.profile?.port,
+    failureKind: payload.failureKind || detail?.failureKind,
+    failureHint: payload.failureHint || detail?.failureHint,
+    completed: detail?.completed,
+    verified: detail?.verified,
+    timedOut: detail?.timedOut,
+    exitCode: detail?.exitCode,
+    stderr: detail?.stderr,
+    stdout: detail?.stdout,
+    error: payload.error,
+  };
+}
+
+function recordToolCall(payload, isError) {
+  const call = currentToolCall;
+  currentToolCall = null;
+  if (!call) {
+    return;
+  }
+  const summary = summarizeForLog(payload);
+  appendLog({
+    kind: "tool",
+    name: call.name,
+    ok: !isError && summary.status !== "失败" && summary.status !== "部分失败" && summary.status !== "错误",
+    durationMs: Date.now() - call.startedAt,
+    args: call.args,
+    ...summary,
+  });
+}
+
 function toolResult(id, payload, { isError = false } = {}) {
   const summary = displayTextFor(payload) || JSON.stringify(payload, null, 2);
   // 传输类结果的明细挂在 payload.result 上，这里统一取出。
@@ -162,6 +207,7 @@ function toolResult(id, payload, { isError = false } = {}) {
     }
   }
   const text = parts.join("\n");
+  recordToolCall(payload, isError);
   sendResult(id, {
     content: [
       {
@@ -239,6 +285,35 @@ function displayTextFor(payload) {
     const failed = payload.status === "失败" ? "（失败）" : "";
     return `sftp -P ${port}${flags.length ? " " + flags.join(" ") : ""} ${target}\nget ${remotePaths.join(" ")} ${localDirectory}\n总结：${summary}${failed}`;
   }
+  if (Array.isArray(payload.entries)) {
+    const header = [
+      "日志目录：" + (payload.logDirectory || ""),
+      "当前文件：" + (payload.currentFile || ""),
+      "文件数：" + (payload.fileCount ?? 0) + "，共 " + formatBytes(payload.totalBytes || 0) + "（保留 " + (payload.keepDays ?? 7) + " 天）",
+      "返回：" + (payload.returned ?? 0) + " 条" + (payload.onlyErrors ? "（仅失败）" : "") + (payload.toolFilter ? "，工具=" + payload.toolFilter : ""),
+      "",
+    ];
+    const lines = payload.entries.map((entry) => {
+      const when = String(entry.ts || "").replace("T", " ").slice(0, 19);
+      const ok = entry.ok === false ? "FAIL" : "OK";
+      const parts = ["[" + when + "] " + entry.name + " " + ok + " " + (entry.durationMs ?? "?") + "ms"];
+      if (entry.args) {
+        parts.push("  args: " + JSON.stringify(entry.args));
+      }
+      if (entry.failureKind) {
+        parts.push("  失败类型: " + entry.failureKind);
+      }
+      if (entry.error) {
+        parts.push("  错误: " + entry.error);
+      }
+      if (entry.stderr) {
+        parts.push("  stderr: " + String(entry.stderr).trim().split("\n").slice(0, 4).join(" / "));
+      }
+      return parts.join("\n");
+    });
+    return [...header, ...lines].join("\n");
+  }
+
   if (action === "连接测试") {
     return `ssh -p ${port} ${target} ${displayShellQuote("printf 'SSH_MANAGER_OK\\n'")}\n总结：测试 SSH 连接`;
   }
@@ -1373,6 +1448,7 @@ function formatToolError(error) {
 async function handleToolCall(id, params) {
   const name = params?.name;
   const args = params?.arguments && typeof params.arguments === "object" ? params.arguments : {};
+  currentToolCall = { name, args, startedAt: Date.now() };
   try {
     switch (name) {
       case "ssh_profile_list": {
@@ -1433,6 +1509,27 @@ async function handleToolCall(id, params) {
         return toolResult(id, await handleDeploy(args));
       case "ssh_download":
         return toolResult(id, await handleDownload(args));
+      case "ssh_log_read": {
+        const toolFilter = args.tool === undefined || args.tool === null ? null : String(args.tool).trim() || null;
+        const logs = readRecentLogs({
+          limit: args.limit,
+          onlyErrors: Boolean(args.onlyErrors),
+          tool: toolFilter,
+        });
+        return toolResult(id, {
+          status: "正常",
+          action: "读取日志",
+          logDirectory: getLogDirectory(),
+          currentFile: logs.currentFile,
+          fileCount: logs.fileCount,
+          totalBytes: logs.totalBytes,
+          keepDays: logs.keepDays,
+          returned: logs.returned,
+          onlyErrors: logs.onlyErrors,
+          toolFilter: logs.toolFilter,
+          entries: logs.entries,
+        });
+      }
       default:
         sendError(id, JsonRpcError.INVALID_PARAMS, `未知工具：${name || ""}`);
     }
@@ -1583,6 +1680,33 @@ const TOOLS = [
       },
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  {
+    name: "ssh_log_read",
+    title: "读取 SSH 操作日志",
+    description: "读取 ssh-manager 的本地操作日志，用于排查失败原因。日志为 JSONL，已自动脱敏，包含每次工具调用的参数、耗时、结果、失败类型、原始 stdout/stderr。默认返回最近 50 条。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        limit: {
+          type: "integer",
+          minimum: 1,
+          maximum: 500,
+          default: 50,
+          description: "返回最近的多少条日志。",
+        },
+        onlyErrors: {
+          type: "boolean",
+          default: false,
+          description: "只返回失败/出错的记录。",
+        },
+        tool: {
+          type: "string",
+          description: "只返回指定工具的日志，例如 ssh_upload。",
+        },
+      },
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   {
     name: "ssh_set_approval_mode",

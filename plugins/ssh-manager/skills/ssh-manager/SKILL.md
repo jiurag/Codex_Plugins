@@ -71,6 +71,7 @@ description: 管理已保存的 SSH 服务器，使用本地加密凭据执行�
 - `ssh_session_register`：为当前任务注册可切换的 SSH 操作会话。
 - `ssh_set_approval_mode`：切换本次会话的操作模式。
 - `ssh_operation_dashboard`：打开、查看或停止 SSH 实时操作面板。
+- `ssh_log_read`：读取本地操作日志。日志为 JSONL，已自动脱敏，包含每次调用的参数、耗时、结果、失败类型和原始 stdout/stderr。排查失败时优先用它。
 - `ssh_terminal_open`：打开持续连接的交互式 SSH 终端。
 - `ssh_terminal_write`：向交互式 SSH 终端发送输入。
 - `ssh_terminal_read`：读取交互式 SSH 终端的新输出。

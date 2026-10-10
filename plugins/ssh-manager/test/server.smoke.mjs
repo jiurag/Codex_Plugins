@@ -419,10 +419,27 @@ async function main() {
 
   assert.deepEqual(approvalMessageViolations, [], "确认表单 message 必须符合可视预算");
 
+  // 日志系统：应生成日志文件、内容脱敏、且能通过工具读回
+  const logDir = path.join(vaultHome, "logs");
+  assert.ok(fs.existsSync(logDir), "应创建日志目录");
+  const logFiles = fs.readdirSync(logDir).filter((name) => name.endsWith(".log"));
+  assert.ok(logFiles.length > 0, "应生成日志文件");
+  const logText = logFiles.map((name) => fs.readFileSync(path.join(logDir, name), "utf8")).join("\n");
+  assert.ok(logText.includes("ssh_profile_upsert"), "日志应记录工具调用");
+  assert.ok(logText.includes("ssh_upload"), "日志应记录上传调用");
+  assert.equal(logText.includes("s3cr3t-value"), false, "日志必须脱敏，不得出现明文密码");
+  const logRead = await client.tool("ssh_log_read", { limit: 5 });
+  assert.equal(logRead._meta.status, "正常");
+  assert.ok(logRead._meta.returned > 0, "ssh_log_read 应返回日志条目");
+  const failedLogs = await client.tool("ssh_log_read", { limit: 20, onlyErrors: true });
+  assert.equal(failedLogs._meta.onlyErrors, true);
+
+
   client.close();
   await waitForExit(child);
   assert.equal(stderr, "", `server stderr should be empty: ${stderr}`);
   fs.rmSync(tempRoot, { recursive: true, force: true });
+
   console.log("SSH_MANAGER_SMOKE_OK");
 }
 

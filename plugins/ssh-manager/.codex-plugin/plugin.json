@@ -1,6 +1,6 @@
 {
   "name": "ssh-manager",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "用于 Codex 的本地 SSH 服务器与部署管理插件，只读默认执行，支持可选会话免确认。",
   "author": {
     "name": "jiurag"

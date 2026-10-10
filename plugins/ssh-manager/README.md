@@ -31,6 +31,7 @@ Codex 本地 SSH 管理插件：保存服务器、账户、密码/私钥口令�
 | `ssh_session_register` | 注册可切换的 SSH 操作会话 | 否 |
 | `ssh_set_approval_mode` | 切换默认执行、只读免确认或会话免确认 | 否 |
 | `ssh_operation_dashboard` | 打开/停止 SSH 实时操作面板 | 否 |
+| `ssh_log_read` | 读取本地操作日志（JSONL、已脱敏、含原始输出） | 否 |
 | `ssh_terminal_open` | 打开持续连接的交互式 SSH 终端 | 默认确认一次 |
 | `ssh_terminal_write` | 向交互式终端发送输入 | 打开后直接发送 |
 | `ssh_terminal_read` | 读取交互式终端新输出 | 否 |
