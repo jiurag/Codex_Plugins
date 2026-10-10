@@ -414,13 +414,28 @@ function validateProfileShape(profile) {
   validateHostKeyPolicy(profile.hostKeyPolicy);
 }
 
+// 命令通过 stdin 交给远端 shell（bash -s），不再拼进命令行参数。
+// 这样引号、换行、&& 、$、反引号都不会被本地 shell 或 ssh 二次解释；
+// stdout / stderr 由 SSH 通道天然分离，退出码就是脚本最后一条命令的退出码。
 export async function runRemoteCommand(profile, command, { timeoutSeconds } = {}) {
   validateProfileShape(profile);
   const remoteCommand = requireString(command, "command", { maxLength: SAFE_COMMAND_MAX_LENGTH });
   const timeoutMs = validateTimeoutSeconds(timeoutSeconds) * 1000;
   const executable = process.env.SSH_MANAGER_SSH_BIN || "ssh";
-  const args = ["-T", ...connectionArguments(profile), connectionTarget(profile), remoteCommand];
-  return withAskpass(profile, (env) => runProcess(executable, args, { env, timeoutMs }));
+  const input = remoteCommand.endsWith("\n") ? remoteCommand : remoteCommand + "\n";
+  const shells = [process.env.SSH_MANAGER_REMOTE_SHELL || "bash", "sh"];
+  let last = null;
+  for (const shell of shells) {
+    const args = ["-T", ...connectionArguments(profile), connectionTarget(profile), shell + " -s"];
+    const result = await withAskpass(profile, (env) => runProcess(executable, args, { env, timeoutMs, input }));
+    last = result;
+    const missingShell = /command not found|not found|No such file or directory/i.test(result.stderr) &&
+      new RegExp("(^|\\W)" + shell + "(:|：)? ?(command )?not found", "i").test(result.stderr);
+    if (!missingShell) {
+      return result;
+    }
+  }
+  return last;
 }
 
 const persistentSessions = new Map();
@@ -1178,7 +1193,13 @@ function remoteJoin(directory, name) {
 }
 
 // 把原始执行结果整理成调用方要的形态：带输出、带分类、带校验结论。
+// 去掉 sftp 会话里用来判定命令完成的内部标记，避免出现在用户可见输出里。
+function stripSftpMarkers(text) {
+  return String(text || "").replace(/__SSH_MANAGER_SFTP_DONE_\d+__\r?\n?/g, "");
+}
+
 function finalizeTransferResult(raw, { direction, expectedRemote, expectedLocal }) {
+  raw = { ...raw, stdout: stripSftpMarkers(raw.stdout), stderr: stripSftpMarkers(raw.stderr) };
   const combined = raw.stdout + "\n" + raw.stderr;
   const failure = classifyTransferFailure(combined);
   const missingLocal = direction === "download" ? expectedLocal.filter((item) => !fs.existsSync(item)) : [];
@@ -1216,6 +1237,81 @@ function finalizeTransferResult(raw, { direction, expectedRemote, expectedLocal 
   };
 }
 
+// 远端路径的 shell 单引号包裹（用于 md5sum / find 这类命令）。
+function shellSingleQuote(value) {
+  return "'" + String(value).replace(/'/g, "'\\''") + "'";
+}
+
+const VERIFY_MAX_FILE_BYTES = 64 * 1024 * 1024;
+
+function localMd5(file) {
+  const stat = fs.statSync(file);
+  if (stat.size > VERIFY_MAX_FILE_BYTES) {
+    return null;
+  }
+  return crypto.createHash("md5").update(fs.readFileSync(file)).digest("hex");
+}
+
+function localTreeSummary(directory) {
+  let files = 0;
+  let bytes = 0;
+  const stack = [directory];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    for (const child of fs.readdirSync(current, { withFileTypes: true })) {
+      const childPath = path.join(current, child.name);
+      if (child.isDirectory()) {
+        stack.push(childPath);
+      } else if (child.isFile()) {
+        files += 1;
+        bytes += fs.statSync(childPath).size;
+      }
+    }
+  }
+  return { files, bytes };
+}
+
+// 上传后校验：单文件比 md5，目录比"文件数 + 总字节"。
+// 返回不匹配的条目，供调用方决定是否重传。
+async function verifyUploadedFiles(profile, pairs, { timeoutSeconds }) {
+  const notes = [];
+  const mismatched = [];
+  for (const pair of pairs) {
+    if (pair.isDirectory) {
+      const local = localTreeSummary(pair.local);
+      const command =
+        "find " + shellSingleQuote(pair.remote) + " -type f -printf '%s\\n' 2>/dev/null | awk '{n++; s+=$1} END{printf \"%d %d\", n, s}'";
+      const result = await runRemoteCommand(profile, command, { timeoutSeconds });
+      const [remoteFiles, remoteBytes] = String(result.stdout || "").trim().split(/\s+/);
+      const ok = result.exitCode === 0 && Number(remoteFiles) === local.files && Number(remoteBytes) === local.bytes;
+      if (!ok) {
+        mismatched.push(pair);
+      }
+      notes.push(
+        path.basename(pair.local) +
+          "（目录）：本地 " + local.files + " 文件/" + local.bytes + " 字节，远端 " +
+          (remoteFiles || "?") + " 文件/" + (remoteBytes || "?") + " 字节" + (ok ? " ✓" : " ✗"),
+      );
+      continue;
+    }
+    const expect = localMd5(pair.local);
+    if (!expect) {
+      notes.push(path.basename(pair.local) + "：文件过大，跳过校验");
+      continue;
+    }
+    const result = await runRemoteCommand(profile, "md5sum " + shellSingleQuote(pair.remote), { timeoutSeconds });
+    const actual = String(result.stdout || "").trim().split(/\s+/)[0] || "";
+    const ok = result.exitCode === 0 && actual === expect;
+    if (!ok) {
+      mismatched.push(pair);
+    }
+    notes.push(
+      path.basename(pair.local) + " md5 " + (ok ? "一致" : "不一致（本地 " + expect.slice(0, 8) + "… / 远端 " + (actual ? actual.slice(0, 8) + "…" : "取不到") + "）"),
+    );
+  }
+  return { ok: mismatched.length === 0, mismatched, note: notes.join("；") };
+}
+
 export async function uploadPaths(profile, localPaths, remoteDirectory, options = {}) {
   validateProfileShape(profile);
   const recursive = Boolean(options.recursive);
@@ -1235,10 +1331,45 @@ export async function uploadPaths(profile, localPaths, remoteDirectory, options 
     commands.push("ls -l " + sftpQuote(remotePath));
   }
 
-  const raw = await withAskpass(profile, (env) =>
+  const pairs = sources.map((source) => ({
+    local: source,
+    remote: remoteJoin(targetDirectory, path.basename(source)),
+    isDirectory: fs.statSync(source).isDirectory(),
+  }));
+
+  let raw = await withAskpass(profile, (env) =>
     runSftpInteractive(profile, commands, { env, recursive, preserveTimes, timeoutMs }),
   );
-  return finalizeTransferResult(raw, { direction: "upload", expectedRemote });
+  let result = finalizeTransferResult(raw, { direction: "upload", expectedRemote });
+
+  if (result.exitCode === 0) {
+    let verification = await verifyUploadedFiles(profile, pairs, { timeoutSeconds: options.timeoutSeconds });
+    if (!verification.ok) {
+      // 校验不一致时自动重传一次（只重传不匹配的条目）。
+      const retryCommands = verification.mismatched.map((pair) =>
+        transferCommand("upload", pair.local, targetDirectory),
+      );
+      if (retryCommands.length > 0) {
+        raw = await withAskpass(profile, (env) =>
+          runSftpInteractive(profile, retryCommands, { env, recursive, preserveTimes, timeoutMs }),
+        );
+        const retryResult = finalizeTransferResult(raw, { direction: "upload", expectedRemote });
+        if (retryResult.exitCode === 0) {
+          verification = await verifyUploadedFiles(profile, pairs, { timeoutSeconds: options.timeoutSeconds });
+        }
+      }
+      result = {
+        ...result,
+        exitCode: verification.ok ? 0 : 1,
+        failureKind: verification.ok ? null : "校验不一致",
+        failureHint: verification.ok ? null : "远端文件与本地不一致，已自动重传一次仍未通过；建议检查磁盘、网络或改用 ssh_deploy 重试。",
+      };
+    }
+    result.verified = verification.ok;
+    result.verifyNote = verification.note;
+  }
+
+  return result;
 }
 
 export async function downloadPaths(profile, remotePaths, localDirectory, options = {}) {

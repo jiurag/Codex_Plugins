@@ -247,6 +247,33 @@ function collectResultOutput(payload) {
   );
 }
 
+// 输出段的统一渲染：先报退出码，再贴内容；内容为空时显式写"（无输出）"。
+// 目的是让"命令本来就没输出"和"输出没被回传"在正文里长得不一样。
+function renderResultOutput(payload) {
+  const body = collectResultOutput(payload);
+  const detail =
+    payload && typeof payload.result === "object" && payload.result !== null ? payload.result : payload;
+  const exitCode =
+    detail?.commandExitCode ?? detail?.exitCode ?? payload?.commandExitCode ?? payload?.exitCode;
+  const timedOut = Boolean(detail?.timedOut || payload?.timedOut);
+  const lines = [];
+  if (typeof exitCode === "number") {
+    lines.push(timedOut ? "exit=" + exitCode + "（超时中断）" : "exit=" + exitCode);
+  } else if (timedOut) {
+    lines.push("exit=?(超时中断)");
+  }
+  if (body) {
+    lines.push(body);
+  } else {
+    lines.push("（无输出）");
+  }
+  const truncated = Boolean(detail?.stdoutTruncated || detail?.stderrTruncated);
+  if (truncated) {
+    lines.push("…（输出已截断，完整内容见 ssh_log_read）");
+  }
+  return lines.join("\n");
+}
+
 function toolResult(id, payload, { isError = false } = {}) {
   const summary = displayTextFor(payload) || JSON.stringify(payload, null, 2);
   // 传输类结果的明细挂在 payload.result 上，这里统一取出。
@@ -261,9 +288,9 @@ function toolResult(id, payload, { isError = false } = {}) {
   if (failureHint) {
     parts.push("建议：" + failureHint);
   }
-  const output = collectResultOutput(payload);
-  if (output) {
-    parts.push((isError || failureKind ? "原始输出：" : "输出：") + "\n" + output);
+  const rendered = renderResultOutput(payload);
+  if (rendered) {
+    parts.push((isError || failureKind ? "原始输出：" : "输出：") + "\n" + rendered);
   }
   const text = parts.join("\n");
   recordToolCall(payload, isError);
@@ -285,6 +312,13 @@ function displayTarget(profile) {
   const user = profile?.username || "";
   const host = profile?.host || profile?.alias || "";
   return `${user}${user ? "@" : ""}${host}`;
+}
+
+// 命令预览：只显示首行，多行时标注总行数。
+function displayCommandPreview(command) {
+  const text = String(command || "").trim();
+  const lines = text.split("\n");
+  return lines.length > 1 ? lines[0] + " …（共 " + lines.length + " 行）" : lines[0];
 }
 
 function displayShellQuote(value) {
@@ -315,7 +349,7 @@ function displayTextFor(payload) {
     const command = payload.command || "";
     const summary = payload.purpose || "执行远程命令";
     const failed = payload.status === "失败" ? "（失败）" : "";
-    return `ssh -p ${port} ${target} ${displayShellQuote(command)}\n总结：${summary}${failed}`;
+    return `$ ${displayCommandPreview(command)}\n总结：${summary}${failed}`;
   }
   if (action === "远程上传") {
     const localPaths = Array.isArray(payload.localPaths) ? payload.localPaths : [];
@@ -323,15 +357,15 @@ function displayTextFor(payload) {
     const flags = displaySftpFlags(payload);
     const summary = payload.purpose || `上传 ${localPaths.length || 1} 项到 ${remoteDirectory}`;
     const failed = payload.status === "失败" ? "（失败）" : "";
-    return `sftp -P ${port}${flags.length ? " " + flags.join(" ") : ""} ${target}\nput ${localPaths.join(" ")} ${remoteDirectory}\n总结：${summary}${failed}`;
+    return `上传 ${localPaths.length || 1} 项 → ${target}:${remoteDirectory}\n总结：${summary}${failed}`;
   }
   if (action === "远程部署") {
     const localPaths = Array.isArray(payload.localPaths) ? payload.localPaths : [];
     const remoteDirectory = payload.remoteDirectory || "";
     const postCommand = payload.postCommand || "";
     const flags = displaySftpFlags(payload);
-    const lines = [`sftp -P ${port}${flags.length ? " " + flags.join(" ") : ""} ${target}\nput ${localPaths.join(" ")} ${remoteDirectory}`];
-    if (postCommand) lines.push(`ssh -p ${port} ${target} ${displayShellQuote(postCommand)}`);
+    const lines = [`上传 ${localPaths.length || 1} 项 → ${target}:${remoteDirectory}`];
+    if (postCommand) lines.push(`$ ${displayCommandPreview(postCommand)}`);
     const summary = payload.purpose || `部署到 ${remoteDirectory}`;
     const failed = payload.status === "失败" || payload.status === "部分失败" ? "（失败）" : "";
     return `${lines.join("\n")}\n总结：${summary}${failed}`;
@@ -342,7 +376,7 @@ function displayTextFor(payload) {
     const flags = displaySftpFlags(payload);
     const summary = payload.purpose || `从远程下载 ${remotePaths.length || 1} 项到 ${localDirectory}`;
     const failed = payload.status === "失败" ? "（失败）" : "";
-    return `sftp -P ${port}${flags.length ? " " + flags.join(" ") : ""} ${target}\nget ${remotePaths.join(" ")} ${localDirectory}\n总结：${summary}${failed}`;
+    return `下载 ${remotePaths.length || 1} 项 ← ${target} → ${localDirectory}\n总结：${summary}${failed}`;
   }
   if (Array.isArray(payload.entries)) {
     const header = [
@@ -1943,7 +1977,8 @@ async function handleRequest(message) {
     return;
   }
 
-  if (method === "tools/call") {
+  
+if (method === "tools/call") {
     if (id === undefined) {
       return;
     }
@@ -1965,6 +2000,8 @@ const lines = readline.createInterface({
   crlfDelay: Infinity,
 });
 
+// 宿主（Codex）关闭 stdin 说明会话结束，直接退出，避免残留子进程把进程挂住。
+lines.on("close", () => process.exit(0));
 lines.on("line", (line) => {
   if (line.trim().length === 0) {
     return;

@@ -22,18 +22,51 @@ function resetTemp() {
 
 function createFakeBinaries() {
   const sshSource = `import fs from "node:fs";
+import path from "node:path";
+import crypto from "node:crypto";
 import readline from "node:readline";
 const args = process.argv.slice(2);
+const localRoot = ${JSON.stringify(tempRoot)};
 fs.appendFileSync(${JSON.stringify(callLog)}, "ssh " + args.join(" ") + "\\n");
 if (args.includes("-tt")) {
   process.stdout.write("FAKE_INTERACTIVE_READY\\n");
-  const rl = readline.createInterface({input: process.stdin});
+  const rl = readline.createInterface({ input: process.stdin, terminal: false });
   rl.on("line", (line) => {
     process.stdout.write("FAKE_ECHO:" + line + "\\n");
     if (line === "exit") process.exit(0);
   });
 } else {
-  process.stdout.write("FAKE_SSH " + args.join(" ") + "\\n");
+  // 命令现在通过 stdin 传入（bash -s / sh -s），这里读脚本后模拟执行。
+  let script = "";
+  const rl = readline.createInterface({ input: process.stdin, terminal: false });
+  rl.on("line", (line) => { script += line + "\\n"; fs.appendFileSync(${JSON.stringify(callLog)}, "  script: " + line + "\\n"); });
+  rl.on("close", () => {
+    const body = script.split("\\n").map((l) => l.trim()).filter(Boolean).join("\\n");
+    const md5 = /md5sum \x27([^\x27]*)\x27/.exec(body);
+    if (md5) {
+      const remote = md5[1];
+      const base = remote.split("/").filter(Boolean).pop() || "";
+      const local = path.join(localRoot, base);
+      if (fs.existsSync(local)) {
+        process.stdout.write(crypto.createHash("md5").update(fs.readFileSync(local)).digest("hex") + "  " + remote + "\\n");
+      } else {
+        process.stderr.write("md5sum: " + remote + ": No such file or directory\\n");
+        process.exitCode = 1;
+      }
+      return;
+    }
+    if (body.includes("FAIL_ME")) {
+      process.stdout.write("partial before failure\\n");
+      process.stderr.write("simulated failure reason\\n");
+      process.exitCode = 7;
+      return;
+    }
+    if (body.includes("awk")) {
+      process.stdout.write("0 0");
+      return;
+    }
+    process.stdout.write("FAKE_SSH " + (body.split("\\n")[0] || "") + "\\n");
+  });
 }
 `;
   const sftpSource = `import fs from "node:fs";\nimport path from "node:path";\nimport readline from "node:readline";\nconst args = process.argv.slice(2);\nconst isBatch = args.includes("-b");\nconst failFlag = ${JSON.stringify(sftpFailFlag)};\nfs.appendFileSync(${JSON.stringify(callLog)}, "sftp " + args.join(" ") + "\\n");\n/* 不回显参数：真实 sftp 也不会这样做，且会污染失败判定 */\nconst rl = readline.createInterface({ input: process.stdin, terminal: false });\nrl.on("line", (line) => {\n  fs.appendFileSync(${JSON.stringify(callLog)}, "  " + line + "\\n");\n  if (fs.existsSync(failFlag) && /^(put|get)\\b/.test(line.trim())) {\n    fs.rmSync(failFlag, { force: true });\n    fs.appendFileSync(${JSON.stringify(callLog)}, "  [FAKE_SFTP_SESSION_BROKEN]\\n");\n    process.stderr.write("Connection closed by remote host\\r\\n");\n    process.exit(1);\n  }\n  const getMatch = /^get(?: -r)? "([^"]*)" "([^"]*)"$/.exec(line.trim());\n  if (getMatch) {\n    const base = getMatch[1].split("/").filter(Boolean).pop() || "file";\n    try { fs.mkdirSync(getMatch[2], { recursive: true }); fs.writeFileSync(path.join(getMatch[2], base), "fake"); } catch {}\n  }\n  if (line.startsWith("!echo ")) { process.stdout.write(line.slice(6) + "\\n"); }\n  else if (line.trim() && line.trim() !== "exit") { process.stdout.write("FAKE_SFTP_CMD:" + line + "\\n"); }\n});\nrl.on("close", () => process.exit(0));\n`;
@@ -287,7 +320,8 @@ async function main() {
   assert.equal(safe._meta.status, "已执行");
   assert.equal(safe._meta.approval, "无需确认");
   const safeText = (safe.content || []).find(item => item.type === "text")?.text || "";
-  assert.match(safeText, /ssh -p 22 root@127\.0\.0\.1 "pwd"/);
+  assert.match(safeText, /^\$ pwd/m, "命令回显应简化为 $ command");
+  assert.match(safeText, /exit=0/, "正文必须带退出码");
   assert.match(safeText, /总结：检查当前目录/);
   assert.match(safeText, /FAKE_SSH/, "命令成功时也必须回传 stdout");
   const afterSafe = fs.existsSync(callLog) ? fs.readFileSync(callLog, "utf8") : "";
@@ -307,6 +341,17 @@ async function main() {
   assert.equal(fs.existsSync(callLog) ? fs.readFileSync(callLog, "utf8") : "", beforeDenied, "denied command must not invoke ssh");
 
   approvalDecision = "confirm";
+  const failedExec = await client.tool("ssh_exec", {
+    alias: "测试服务器",
+    command: "FAIL_ME",
+    purpose: "失败路径回归测试",
+  });
+  assert.equal(failedExec._meta.status, "失败");
+  const failedText = (failedExec.content || []).find((item) => item.type === "text")?.text || "";
+  assert.match(failedText, /exit=7/, "失败正文必须带退出码");
+  assert.match(failedText, /simulated failure reason/, "失败正文必须带 stderr");
+  assert.match(failedText, /partial before failure/, "失败时也要保留已产生的 stdout");
+
   const approved = await client.tool("ssh_exec", {
     alias: "测试服务器",
     command: "systemctl restart demo-service",
@@ -314,7 +359,8 @@ async function main() {
   });
   assert.equal(approved._meta.status, "已执行");
   const approvedText = (approved.content || []).find(item => item.type === "text")?.text || "";
-  assert.match(approvedText, /ssh -p 22 root@127\.0\.0\.1 "systemctl restart demo-service"/);
+  assert.match(approvedText, /^\$ systemctl restart demo-service/m, "命令回显应简化为 $ command");
+  assert.match(approvedText, /exit=0/, "正文必须带退出码");
   assert.match(approvedText, /总结：approval test/);
   assert.ok(fs.readFileSync(callLog, "utf8").includes("systemctl restart demo-service"));
 
@@ -388,6 +434,7 @@ async function main() {
   const logAfterDeploy = fs.readFileSync(callLog, "utf8");
   assert.ok(logAfterDeploy.includes("sftp "));
   assert.ok(logAfterDeploy.includes("put "), "上传应通过 sftp 的 put 指令完成");
+  assert.match(deployText, /上传 1 项/, "上传展示应为可读形式");
 
   // 先真正打开常驻会话（SSH + SFTP），否则降级路径不会被触发
   const opened = await client.tool("ssh_session_open", { alias: "测试服务器" });
@@ -411,6 +458,7 @@ async function main() {
   fs.rmSync(sftpFailFlag, { force: true });
   assert.equal(logAfterDeploy.toLowerCase().includes("scp"), false, "不得再调用 scp");
   assert.ok(logAfterDeploy.includes("systemctl restart demo-service"));
+  assert.equal(deploy._meta.uploadResult?.verified, true, "上传后必须通过校验");
 
   await client.tool("ssh_operation_dashboard", { action: "停止" });
 
