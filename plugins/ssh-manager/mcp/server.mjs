@@ -53,7 +53,7 @@ import {
 } from "./lib/ssh.mjs";
 
 const SERVER_NAME = "Codex SSH 管理器";
-const SERVER_VERSION = "0.1.5";
+const SERVER_VERSION = "0.1.6";
 const ELICITATION_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_MESSAGE_LENGTH = 20_000;
 // Codex 的 elicitation 面板高度 = message 换行后的行数 + 选项区高度
@@ -159,6 +159,13 @@ function summarizeForLog(payload) {
     exitCode: detail?.exitCode,
     stderr: detail?.stderr,
     stdout: detail?.stdout,
+    // ssh_deploy 的上传与 postCommand 输出是分开的两块，必须都记下来。
+    uploadExitCode: payload.uploadResult?.exitCode,
+    uploadStdout: payload.uploadResult?.stdout,
+    uploadStderr: payload.uploadResult?.stderr,
+    commandExitCode: payload.commandResult?.exitCode,
+    commandStdout: payload.commandResult?.stdout,
+    commandStderr: payload.commandResult?.stderr,
     error: payload.error,
   };
 }
@@ -180,6 +187,66 @@ function recordToolCall(payload, isError) {
   });
 }
 
+const MAX_RESULT_OUTPUT_CHARS = 4000;
+
+// 汇总一次调用里所有需要展示给用户的子进程输出。
+// 成功和失败都要带：ssh_exec 的 stdout 本身就是执行结果，deploy 的 postCommand 同理。
+// 依次检查顶层、result、uploadResult、commandResult，按对象引用去重。
+function collectResultOutput(payload) {
+  const seen = new Set();
+  const sections = [];
+  const sources = [
+    ["", payload],
+    ["", payload?.result],
+    ["上传", payload?.uploadResult],
+    ["部署后命令", payload?.commandResult],
+    ["持久连接", payload?.session],
+  ];
+  for (const [label, source] of sources) {
+    if (!source || typeof source !== "object" || seen.has(source)) {
+      continue;
+    }
+    seen.add(source);
+    const stdout = typeof source.stdout === "string" ? source.stdout.trim() : "";
+    const stderr = typeof source.stderr === "string" ? source.stderr.trim() : "";
+    if (stdout) {
+      sections.push({ label: label ? label + " stdout" : "stdout", text: stdout });
+    }
+    if (stderr) {
+      sections.push({ label: label ? label + " stderr" : "stderr", text: stderr });
+    }
+    // ssh_log_read 这类工具直接把 entries 里的输出带出来。
+    if (Array.isArray(source.entries)) {
+      for (const entry of source.entries) {
+        const entryStdout = typeof entry?.stdout === "string" ? entry.stdout.trim() : "";
+        const entryStderr = typeof entry?.stderr === "string" ? entry.stderr.trim() : "";
+        if (entryStdout) {
+          sections.push({ label: (entry.name || "日志") + " stdout", text: entryStdout });
+        }
+        if (entryStderr) {
+          sections.push({ label: (entry.name || "日志") + " stderr", text: entryStderr });
+        }
+      }
+    }
+  }
+  if (sections.length === 0) {
+    return "";
+  }
+  const multi = sections.length > 1;
+  const rendered = sections
+    .map((section) => (multi ? "[" + section.label + "]\n" + section.text : section.text))
+    .join("\n\n");
+  if (rendered.length <= MAX_RESULT_OUTPUT_CHARS) {
+    return rendered;
+  }
+  return (
+    rendered.slice(0, MAX_RESULT_OUTPUT_CHARS) +
+    "\n…（输出已截断，" +
+    (rendered.length - MAX_RESULT_OUTPUT_CHARS) +
+    " 字符未显示；完整内容见 ssh_log_read）"
+  );
+}
+
 function toolResult(id, payload, { isError = false } = {}) {
   const summary = displayTextFor(payload) || JSON.stringify(payload, null, 2);
   // 传输类结果的明细挂在 payload.result 上，这里统一取出。
@@ -194,17 +261,9 @@ function toolResult(id, payload, { isError = false } = {}) {
   if (failureHint) {
     parts.push("建议：" + failureHint);
   }
-  const failed =
-    isError || Boolean(failureKind) || payload?.status === "失败" || payload?.status === "部分失败";
-  if (failed) {
-    const stderr = typeof detail?.stderr === "string" ? detail.stderr.trim() : "";
-    const stdout = typeof detail?.stdout === "string" ? detail.stdout.trim() : "";
-    const rawOutput = [stderr, stdout].filter(Boolean).join("\n").trim();
-    if (rawOutput) {
-      const clipped =
-        rawOutput.length > 2000 ? rawOutput.slice(0, 2000) + "\n…（原始输出已截断）" : rawOutput;
-      parts.push("原始输出：\n" + clipped);
-    }
+  const output = collectResultOutput(payload);
+  if (output) {
+    parts.push((isError || failureKind ? "原始输出：" : "输出：") + "\n" + output);
   }
   const text = parts.join("\n");
   recordToolCall(payload, isError);
@@ -306,8 +365,22 @@ function displayTextFor(payload) {
       if (entry.error) {
         parts.push("  错误: " + entry.error);
       }
+      if (entry.stdout) {
+        parts.push("  stdout: " + String(entry.stdout).trim().split("\n").slice(0, 6).join(" / "));
+      }
+      if (entry.uploadStdout || entry.commandStdout) {
+        if (entry.uploadStdout) {
+          parts.push("  上传输出: " + String(entry.uploadStdout).trim().split("\n").slice(0, 4).join(" / "));
+        }
+        if (entry.commandStdout) {
+          parts.push("  部署命令输出: " + String(entry.commandStdout).trim().split("\n").slice(0, 6).join(" / "));
+        }
+      }
       if (entry.stderr) {
         parts.push("  stderr: " + String(entry.stderr).trim().split("\n").slice(0, 4).join(" / "));
+      }
+      if (entry.commandStderr) {
+        parts.push("  部署命令错误: " + String(entry.commandStderr).trim().split("\n").slice(0, 4).join(" / "));
       }
       return parts.join("\n");
     });

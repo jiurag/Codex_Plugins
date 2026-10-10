@@ -289,6 +289,7 @@ async function main() {
   const safeText = (safe.content || []).find(item => item.type === "text")?.text || "";
   assert.match(safeText, /ssh -p 22 root@127\.0\.0\.1 "pwd"/);
   assert.match(safeText, /总结：检查当前目录/);
+  assert.match(safeText, /FAKE_SSH/, "命令成功时也必须回传 stdout");
   const afterSafe = fs.existsSync(callLog) ? fs.readFileSync(callLog, "utf8") : "";
   assert.ok(afterSafe.length > beforeSafe.length);
   assert.ok(afterSafe.includes("pwd"));
@@ -382,6 +383,8 @@ async function main() {
     purpose: "smoke deploy",
   });
   assert.equal(deploy._meta.status, "已部署");
+  const deployText = (deploy.content || []).find((item) => item.type === "text")?.text || "";
+  assert.match(deployText, /FAKE_SSH/, "部署后命令的 stdout 也必须回传");
   const logAfterDeploy = fs.readFileSync(callLog, "utf8");
   assert.ok(logAfterDeploy.includes("sftp "));
   assert.ok(logAfterDeploy.includes("put "), "上传应通过 sftp 的 put 指令完成");
@@ -431,6 +434,8 @@ async function main() {
   const logRead = await client.tool("ssh_log_read", { limit: 5 });
   assert.equal(logRead._meta.status, "正常");
   assert.ok(logRead._meta.returned > 0, "ssh_log_read 应返回日志条目");
+  const logReadText = (logRead.content || []).find((item) => item.type === "text")?.text || "";
+  assert.match(logReadText, /stdout/, "ssh_log_read 的渲染里应带出 stdout");
   const failedLogs = await client.tool("ssh_log_read", { limit: 20, onlyErrors: true });
   assert.equal(failedLogs._meta.onlyErrors, true);
 
