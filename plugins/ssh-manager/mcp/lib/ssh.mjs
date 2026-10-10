@@ -13,6 +13,9 @@ const DEFAULT_TIMEOUT_SECONDS = 120;
 const READ_ONLY_TIMEOUT_SECONDS = 30;
 // 常驻 SSH 会话空闲超过这个时间就回收，避免复用已经失效的连接。
 const PERSISTENT_IDLE_MS = 5 * 60 * 1000;
+// stdout 与 stderr 是两条独立通道，结束标记往往先于 stderr 到达。
+// 收到结束标记后再等这么久，把可能晚到的 stderr 收进来，否则报错会"碰运气"丢失。
+const END_MARKER_GRACE_MS = 150;
 const MAX_TIMEOUT_SECONDS = 900;
 const MAX_CAPTURE_BYTES = 512 * 1024;
 const SAFE_COMMAND_MAX_LENGTH = 20_000;
@@ -83,6 +86,11 @@ const SAFE_READ_COMMANDS = [
   /^lsb_release(?:\s+-[a-z]+)*$/,
   /^stat\s+-c(?:\s+[^\r\n;&|`$(){}<>]+)+$/,
   /^printenv(?:\s+[^\r\n;&|`$(){}<>]+)*$/,
+  /^true$/,
+  /^false$/,
+  /^echo(?:\s+[^\r\n;&|`$(){}<>]+)*$/,
+  /^printf(?:\s+[^\r\n;&|`$(){}<>]+)+$/,
+  /^sleep\s+\d+$/,
 ];
 
 const DESTRUCTIVE_PATTERN = /\b(?:rm|rmdir|unlink|shred|dd|mkfs|fdisk|parted|truncate|chmod|chown|chgrp|kill|pkill|killall|shutdown|reboot|halt|poweroff|iptables|ip6tables|nft|ufw|firewall-cmd|systemctl\s+(?:stop|restart|start|disable|enable|mask|unmask)|service\s+\S+\s+(?:stop|restart|start)|docker\s+(?:rm|rmi|stop|kill|prune|system\s+prune)|kubectl\s+delete|sed\s+-i|tee\b|mv\b|cp\b|tar\s+.*\s-x)\b/i;
@@ -221,26 +229,43 @@ export function connectionTarget(profile) {
 
 export function isSafeReadOnlyCommand(command) {
   const value = requireString(command, "command", { maxLength: SAFE_COMMAND_MAX_LENGTH }).trim();
-  if (value.length === 0 || SHELL_META_PATTERN.test(value) || value.includes("\u0000")) {
+  if (value.length === 0 || value.includes("\u0000")) {
     return false;
   }
-  if (SECRET_PATH_PATTERN.test(value)) {
+  // 归一化：先摘掉"只合并标准流"（2>&1 / >&2）和"丢弃到 /dev/null"的重定向——
+  // 它们不写文件、不改系统，不该被当成写操作；归一化同时清掉多余空格，便于白名单匹配。
+  const normalized = value
+    .replace(/\s*\d?>&\d\s*/g, " ")
+    .replace(/\s*\d?>>?\s*\/dev\/null\s*/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (normalized.length === 0) {
     return false;
   }
-  if (value.includes(" --follow") || value.includes(" -f") || /\btail\s+-[^\s]*f/.test(value)) {
+  if (SHELL_META_PATTERN.test(normalized)) {
+    return false;
+  }
+  // 归一化后仍有真正的输出重定向（写文件）→ 按变更处理。
+  if (/(?<!&)>(?!&)/.test(normalized)) {
+    return false;
+  }
+  if (SECRET_PATH_PATTERN.test(normalized)) {
+    return false;
+  }
+  if (normalized.includes(" --follow") || normalized.includes(" -f") || /\btail\s+-[^\s]*f/.test(normalized)) {
     return false;
   }
   // 这些形式虽然命令本身是只读工具，但能间接改文件或执行命令，必须排除。
-  if (/\bfind\b[^\r\n]*\s-(?:exec|execdir|ok|okdir|delete|fls|fprint|fprintf)\b/.test(value)) {
+  if (/\bfind\b[^\r\n]*\s-(?:exec|execdir|ok|okdir|delete|fls|fprint|fprintf)\b/.test(normalized)) {
     return false;
   }
-  if (/\bsed\b[^\r\n]*\s-i/.test(value)) {
+  if (/\bsed\b[^\r\n]*\s-i/.test(normalized)) {
     return false;
   }
-  if (/\b(?:tee|sponge)\b/.test(value)) {
+  if (/\b(?:tee|sponge)\b/.test(normalized)) {
     return false;
   }
-  return SAFE_READ_COMMANDS.some((pattern) => pattern.test(value));
+  return SAFE_READ_COMMANDS.some((pattern) => pattern.test(normalized));
 }
 
 export function isDestructiveCommand(command) {
@@ -564,6 +589,10 @@ function createPersistentSession(profile) {
     }
     current.settled = true;
     clearTimeout(current.timer);
+    if (current.graceTimer) {
+      clearTimeout(current.graceTimer);
+      current.graceTimer = null;
+    }
     const result = sessionResult(current.startedAt, current.stdout, current.stderr, exitCode, timedOut);
     const resolve = current.resolve;
     current = null;
@@ -606,7 +635,15 @@ function createPersistentSession(profile) {
       const exitText = stdoutBuffer.slice(0, lineEnd).trim();
       stdoutBuffer = stdoutBuffer.slice(lineEnd + 1);
       const exitCode = Number.parseInt(exitText, 10);
-      finishCurrent(Number.isInteger(exitCode) ? exitCode : 1);
+      const resolvedExit = Number.isInteger(exitCode) ? exitCode : 1;
+      // 不立刻收尾：stderr 可能还在路上，留一个宽限期把它收进来。
+      if (current.graceTimer) {
+        clearTimeout(current.graceTimer);
+      }
+      current.graceTimer = setTimeout(() => finishCurrent(resolvedExit), END_MARKER_GRACE_MS);
+      if (typeof current.graceTimer.unref === "function") {
+        current.graceTimer.unref();
+      }
     }
   }
 
@@ -666,6 +703,7 @@ function createPersistentSession(profile) {
         current = {
           startMarker,
           endPrefix,
+          graceTimer: null,
           started: false,
           settled: false,
           stdout: [],

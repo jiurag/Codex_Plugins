@@ -58,7 +58,7 @@ import {
 } from "./lib/ssh.mjs";
 
 const SERVER_NAME = "Codex SSH 管理器";
-const SERVER_VERSION = "0.2.1";
+const SERVER_VERSION = "0.2.2";
 const ELICITATION_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_MESSAGE_LENGTH = 20_000;
 // Codex 的 elicitation 面板高度 = message 换行后的行数 + 选项区高度
@@ -312,9 +312,17 @@ function clipOutputForDisplay(text) {
 }
 
 function renderResultOutput(payload) {
+  // 部署类结果的主体是 postCommand 的 commandResult（其次才是上传结果）。
   const detail =
-    payload && typeof payload.result === "object" && payload.result !== null ? payload.result : payload;
-  const hasResultField = payload && typeof payload.result === "object" && payload.result !== null;
+    payload?.commandResult && typeof payload.commandResult === "object"
+      ? payload.commandResult
+      : payload && typeof payload.result === "object" && payload.result !== null
+        ? payload.result
+        : payload;
+  const hasResultField =
+    (payload && typeof payload.result === "object" && payload.result !== null) ||
+    Boolean(payload?.commandResult) ||
+    Boolean(payload?.uploadResult);
   const body = collectResultOutput(payload);
   const exitCode =
     detail?.commandExitCode ?? detail?.exitCode ?? payload?.commandExitCode ?? payload?.exitCode;
@@ -345,10 +353,12 @@ function renderResultOutput(payload) {
 
   // 关键字段回显进正文：校验结论、实际生效的超时、耗时。
   const notes = [];
-  if (payload?.verified === true) {
-    notes.push("校验：一致");
-  } else if (payload?.verified === false) {
-    notes.push("校验：不一致 ⚠");
+  const verifiedValue =
+    payload?.verified ?? detail?.verified ?? payload?.uploadResult?.verified ?? undefined;
+  if (verifiedValue === true) {
+    notes.push("校验：一致 ✓");
+  } else if (verifiedValue === false) {
+    notes.push("校验：不一致，已自动重传 ⚠");
   }
   if (typeof payload?.timeoutSeconds === "number") {
     notes.push("超时：" + payload.timeoutSeconds + " 秒");
@@ -435,7 +445,8 @@ function displayTextFor(payload) {
   const target = displayTarget(profile);
 
   if (payload.status === "已拒绝" || payload.status === "已阻止") {
-    return `${action || "操作"}：未执行\n总结：${payload.reason || payload.status || "未执行"}`;
+    const detailText = payload.message || payload.reason || payload.status || "未执行";
+    return `${action || "操作"}：未执行\n${detailText}`;
   }
 
   if (action === "远程命令") {
@@ -1586,6 +1597,16 @@ ${postCommand ? `部署后命令：\n${limitPreviewLines(postCommand, 4)}\n` : "
         });
   }
   const success = uploadResult.exitCode === 0 && (!postCommand || commandResult?.exitCode === 0);
+  // 部署失败时对齐传输/命令的分类，避免只知道"失败了"。
+  let deployFailure = null;
+  if (!success) {
+    const failedStep = uploadResult.exitCode !== 0 ? uploadResult : commandResult;
+    if (failedStep) {
+      deployFailure = classifyRemoteFailure(
+        [failedStep.stderr, failedStep.stdout].filter(Boolean).join("\n"),
+      );
+    }
+  }
   audit(vault, {
     alias: profile.alias,
     action: "远程部署",
@@ -1613,6 +1634,8 @@ ${postCommand ? `部署后命令：\n${limitPreviewLines(postCommand, 4)}\n` : "
     recursive: input.recursive,
     preserveTimes: input.preserveTimes,
     purpose,
+    failureKind: deployFailure?.kind || null,
+    failureHint: deployFailure?.hint || null,
     uploadResult,
     commandResult,
   };
