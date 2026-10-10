@@ -238,6 +238,8 @@ export function createEmptyVault() {
     version: VAULT_VERSION,
     profiles: {},
     audit: [],
+    // 运行期状态（例如会话免确认模式及其时间戳），需要跨 MCP 进程重启保留。
+    runtime: {},
   };
 }
 
@@ -257,16 +259,25 @@ export function readVault() {
     ...payload,
     profiles: payload.profiles && typeof payload.profiles === "object" ? payload.profiles : {},
     audit: Array.isArray(payload.audit) ? payload.audit : [],
+    runtime: payload.runtime && typeof payload.runtime === "object" ? payload.runtime : {},
   };
 }
 
 export function writeVault(vault) {
   const file = path.join(getVaultHome(), "vault.json");
   const key = loadOrCreateMasterKey();
+  const runtime = vault?.runtime && typeof vault.runtime === "object" ? { ...vault.runtime } : {};
+  // 只允许白名单字段进入运行时状态，避免把任意内容写进仓库。
   const normalized = {
     version: VAULT_VERSION,
     profiles: vault?.profiles && typeof vault.profiles === "object" ? vault.profiles : {},
     audit: Array.isArray(vault?.audit) ? vault.audit.slice(-250) : [],
+    runtime: {
+      approvalMode: typeof runtime.approvalMode === "string" ? runtime.approvalMode : undefined,
+      approvalModeUpdatedAt: Number.isFinite(runtime.approvalModeUpdatedAt)
+        ? runtime.approvalModeUpdatedAt
+        : undefined,
+    },
   };
   atomicWrite(file, JSON.stringify(encryptPayload(normalized, key), null, 2), 0o600);
 }

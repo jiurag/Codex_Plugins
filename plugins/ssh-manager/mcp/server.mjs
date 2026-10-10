@@ -57,7 +57,7 @@ import {
 } from "./lib/ssh.mjs";
 
 const SERVER_NAME = "Codex SSH 管理器";
-const SERVER_VERSION = "0.1.9";
+const SERVER_VERSION = "0.2.0";
 const ELICITATION_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_MESSAGE_LENGTH = 20_000;
 // Codex 的 elicitation 面板高度 = message 换行后的行数 + 选项区高度
@@ -83,6 +83,46 @@ const APPROVAL_MODES = {
   SESSION_AUTO: "会话免确认",
 };
 let approvalMode = APPROVAL_MODES.DEFAULT;
+// "会话免确认"跨 MCP 进程重启的有效期。Codex 在 cwd/审批策略/权限变化时会重建 MCP 进程，
+// 之前该模式只存在内存里，于是"聊几轮又弹确认"。现在持久化到 vault，并只在窗口内恢复。
+const SESSION_AUTO_TTL_MS =
+  Math.max(1, Number.parseInt(process.env.SSH_MANAGER_SESSION_AUTO_TTL_MINUTES || "30", 10) || 30) * 60 * 1000;
+let sessionAutoRestoredAt = null;
+
+function persistApprovalMode(mode) {
+  try {
+    const vault = readVault();
+    vault.runtime = {
+      ...(vault.runtime || {}),
+      approvalMode: mode,
+      approvalModeUpdatedAt: Date.now(),
+    };
+    writeVault(vault);
+  } catch {
+    // 持久化失败不影响本次操作。
+  }
+}
+
+function restoreApprovalMode() {
+  try {
+    const vault = readVault();
+    const runtime = vault.runtime && typeof vault.runtime === "object" ? vault.runtime : {};
+    if (runtime.approvalMode !== APPROVAL_MODES.SESSION_AUTO) {
+      return;
+    }
+    const updatedAt = Number(runtime.approvalModeUpdatedAt) || 0;
+    const age = Date.now() - updatedAt;
+    if (age < 0 || age > SESSION_AUTO_TTL_MS) {
+      return;
+    }
+    approvalMode = APPROVAL_MODES.SESSION_AUTO;
+    sessionAutoRestoredAt = updatedAt;
+  } catch {
+    // 读取失败就按默认模式处理。
+  }
+}
+
+restoreApprovalMode();
 const terminalController = createTerminalController();
 let liveSessionId =
   process.env.CODEX_THREAD_ID ||
@@ -676,6 +716,7 @@ async function askApproval({ title, message, details }) {
   const decision = result?.content?.decision;
   if (decision === "confirm_and_auto") {
     approvalMode = APPROVAL_MODES.SESSION_AUTO;
+    persistApprovalMode(APPROVAL_MODES.SESSION_AUTO);
     return {
       approved: true,
       reason: "已确认并开启会话免询问",
@@ -1080,6 +1121,10 @@ async function handleSetApprovalMode(args) {
     throw new ToolInputError("模式必须是：默认执行、只读免确认 或 会话免确认。");
   }
   approvalMode = mode;
+  persistApprovalMode(mode);
+  if (mode !== APPROVAL_MODES.SESSION_AUTO) {
+    sessionAutoRestoredAt = null;
+  }
   const description = mode === APPROVAL_MODES.SESSION_AUTO
     ? "当前 MCP 会话内，敏感操作也不再询问，默认直接执行。"
     : mode === APPROVAL_MODES.READ_ONLY
@@ -1637,6 +1682,11 @@ async function handleToolCall(id, params) {
           exists: vaultExists(),
           protection: `${getKeyProtection()} + AES-256-GCM`,
           approvalMode,
+          sessionAutoTtlMinutes: Math.round(SESSION_AUTO_TTL_MS / 60000),
+          sessionAutoRestored: sessionAutoRestoredAt ? new Date(sessionAutoRestoredAt).toISOString() : null,
+          sessionAutoExpiresAt: sessionAutoRestoredAt
+            ? new Date(sessionAutoRestoredAt + SESSION_AUTO_TTL_MS).toISOString()
+            : null,
           dashboard: getDashboardStatus(),
           persistentSessions: getPersistentSessionStatus().length,
           persistentSftpSessions: getPersistentSftpStatus().length,

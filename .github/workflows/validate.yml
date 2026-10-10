@@ -1,0 +1,41 @@
+name: validate-plugin
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: 校验版本号一致性
+        run: |
+          set -euo pipefail
+          PLUGIN=$(node -p "require('./plugins/ssh-manager/.codex-plugin/plugin.json').version")
+          SERVER=$(node -e "const fs=require('fs');const s=fs.readFileSync('plugins/ssh-manager/mcp/server.mjs','utf8');const m=/SERVER_VERSION = \"([^\"]+)\"/.exec(s);console.log(m?m[1]:'')")
+          echo "plugin.json    = $PLUGIN"
+          echo "SERVER_VERSION = $SERVER"
+          if [ -z "$SERVER" ]; then echo "::error::server.mjs 里找不到 SERVER_VERSION"; exit 1; fi
+          if [ "$PLUGIN" != "$SERVER" ]; then echo "::error::plugin.json 与 SERVER_VERSION 版本号不一致"; exit 1; fi
+          if [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
+            TAG="${GITHUB_REF_NAME#v}"
+            echo "tag            = $TAG"
+            if [ "$TAG" != "$PLUGIN" ]; then echo "::error::tag 与 plugin.json 版本号不一致"; exit 1; fi
+          fi
+
+      - name: 校验 marketplace 指向的插件存在
+        run: |
+          set -euo pipefail
+          test -f .agents/plugins/marketplace.json
+          node -e "const m=require('./.agents/plugins/marketplace.json');for(const p of m.plugins){const fs=require('fs');const target=require('path').join('.',p.source.path,'.codex-plugin/plugin.json');if(!fs.existsSync(target)){console.error('marketplace 指向的插件不存在: '+target);process.exit(1);}}console.log('marketplace 条目全部有效，共 '+m.plugins.length+' 个');"
+
+      - name: 冒烟测试
+        run: node plugins/ssh-manager/test/server.smoke.mjs
