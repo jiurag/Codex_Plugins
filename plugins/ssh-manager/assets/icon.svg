@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="SSH 管理">
+  <title>SSH 管理</title>
+  <defs>
+    <linearGradient id="ssh-manager-shield" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#14988A"/>
+      <stop offset="1" stop-color="#0B5C56"/>
+    </linearGradient>
+  </defs>
+  <!-- 盾牌：代表凭据加密、授权确认的安全边界 -->
+  <path d="M32 3 L57 12 v21 c0 15 -11 24 -25 28 C18 57 7 48 7 33 V12 Z" fill="url(#ssh-manager-shield)"/>
+  <!-- 终端提示符：代表远程命令与部署 -->
+  <path d="M21 24 L29 32 L21 40" fill="none" stroke="#FFFFFF" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="33" y="36.5" width="11" height="4.2" rx="2.1" fill="#FFFFFF"/>
+</svg>
