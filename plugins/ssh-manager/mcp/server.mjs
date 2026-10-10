@@ -8,6 +8,8 @@ import {
   recordOperation,
   startDashboard,
   stopDashboard,
+  appendStreamChunk,
+  updateOperation,
 } from "./lib/dashboard.mjs";
 import { createTerminalController } from "./lib/terminal.mjs";
 import { appendLog, readRecentLogs, getLogDirectory } from "./lib/log.mjs";
@@ -55,7 +57,7 @@ import {
 } from "./lib/ssh.mjs";
 
 const SERVER_NAME = "Codex SSH 管理器";
-const SERVER_VERSION = "0.1.8";
+const SERVER_VERSION = "0.1.9";
 const ELICITATION_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_MESSAGE_LENGTH = 20_000;
 // Codex 的 elicitation 面板高度 = message 换行后的行数 + 选项区高度
@@ -1270,7 +1272,36 @@ ${purpose ? `用途：${purpose}\n` : ""}影响：会在远程服务器上执行
     : modeDecision === "allow"
       ? "会话免确认"
       : "已同意";
-  const result = await execWithFallback(profile, command, { timeoutSeconds });
+  // 流式模式：先登记一条"执行中"记录，把实时输出推给面板，结束后更新状态。
+  const streamEnabled = args.stream !== false;
+  const pendingId = streamEnabled ? crypto.randomUUID() : null;
+  if (pendingId) {
+    recordOperation({
+      id: pendingId,
+      timestamp: new Date().toISOString(),
+      sessionId: liveSessionId,
+      sessionName: liveSessionName,
+      alias: profile.alias,
+      action: "远程命令",
+      approved: true,
+      result: "执行中",
+      summary: purpose || command,
+      details: { command, purpose, risk: classification.risk, approvalMode },
+      mode: approvalMode,
+      streaming: true,
+    });
+  }
+  const result = await execWithFallback(profile, command, {
+    timeoutSeconds,
+    onChunk: pendingId ? (chunk) => appendStreamChunk(pendingId, chunk) : undefined,
+  });
+  if (pendingId) {
+    updateOperation(pendingId, {
+      streaming: false,
+      result: result.exitCode === 0 ? "完成" : "失败",
+      exitCode: result.exitCode,
+    });
+  }
   audit(vault, {
     alias: profile.alias,
     action: "远程命令",
@@ -1934,6 +1965,11 @@ const TOOLS = [
         command: { type: "string", description: "要执行的完整远程命令，建议每次只执行一条命令。" },
         purpose: { type: "string", description: "执行该命令的简短用途。" },
         timeoutSeconds: { type: "integer", minimum: 1, maximum: 900, description: "命令超时时间，单位秒。" },
+        stream: {
+          type: "boolean",
+          default: true,
+          description: "是否把命令的实时输出推送到操作面板（默认开启；面板未打开时不产生额外开销）。",
+        },
       },
       required: ["alias", "command", "purpose"],
     },

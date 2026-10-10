@@ -349,7 +349,8 @@ function appendCaptured(target, chunk, state) {
   target.push(buffer);
 }
 
-async function runProcess(executable, args, { env, timeoutMs = DEFAULT_TIMEOUT_SECONDS * 1000, input } = {}) {
+async function runProcess(executable, args, { env, timeoutMs = DEFAULT_TIMEOUT_SECONDS * 1000, input, onChunk } = {}) {
+  const emit = typeof onChunk === "function" ? onChunk : null;
   return new Promise((resolve, reject) => {
     const startedAt = Date.now();
     const isNodeScript = /\.(?:mjs|cjs|js)$/i.test(executable);
@@ -384,8 +385,14 @@ async function runProcess(executable, args, { env, timeoutMs = DEFAULT_TIMEOUT_S
     }, timeoutMs);
     timer.unref();
 
-    child.stdout.on("data", (chunk) => appendCaptured(stdout, chunk, stdoutState));
-    child.stderr.on("data", (chunk) => appendCaptured(stderr, chunk, stderrState));
+    child.stdout.on("data", (chunk) => {
+      appendCaptured(stdout, chunk, stdoutState);
+      if (emit) emit({ stream: "stdout", text: chunk.toString("utf8") });
+    });
+    child.stderr.on("data", (chunk) => {
+      appendCaptured(stderr, chunk, stderrState);
+      if (emit) emit({ stream: "stderr", text: chunk.toString("utf8") });
+    });
     child.on("error", (error) => {
       settled = true;
       clearTimeout(timer);
@@ -423,7 +430,7 @@ function validateProfileShape(profile) {
 // 命令通过 stdin 交给远端 shell（bash -s），不再拼进命令行参数。
 // 这样引号、换行、&& 、$、反引号都不会被本地 shell 或 ssh 二次解释；
 // stdout / stderr 由 SSH 通道天然分离，退出码就是脚本最后一条命令的退出码。
-export async function runRemoteCommand(profile, command, { timeoutSeconds } = {}) {
+export async function runRemoteCommand(profile, command, { timeoutSeconds, onChunk } = {}) {
   validateProfileShape(profile);
   const remoteCommand = requireString(command, "command", { maxLength: SAFE_COMMAND_MAX_LENGTH });
   const timeoutMs = validateTimeoutSeconds(timeoutSeconds) * 1000;
@@ -433,7 +440,7 @@ export async function runRemoteCommand(profile, command, { timeoutSeconds } = {}
   let last = null;
   for (const shell of shells) {
     const args = ["-T", ...connectionArguments(profile), connectionTarget(profile), shell + " -s"];
-    const result = await withAskpass(profile, (env) => runProcess(executable, args, { env, timeoutMs, input }));
+    const result = await withAskpass(profile, (env) => runProcess(executable, args, { env, timeoutMs, input, onChunk }));
     last = result;
     const missingShell = /command not found|not found|No such file or directory/i.test(result.stderr) &&
       new RegExp("(^|\\W)" + shell + "(:|：)? ?(command )?not found", "i").test(result.stderr);
@@ -516,7 +523,10 @@ function createPersistentSession(profile) {
     resolve(result);
   }
 
+  let chunkEmitter = null;
+
   function handleStdout(chunk) {
+    if (chunkEmitter) chunkEmitter({ stream: "stdout", text: chunk.toString("utf8") });
     stdoutBuffer += chunk.toString("utf8");
     while (current) {
       if (!current.started) {
@@ -558,7 +568,8 @@ function createPersistentSession(profile) {
     if (current && current.started) {
       current.stderr.push(text);
     } else {
-      stderrBuffer += text;
+      if (chunkEmitter) chunkEmitter({ stream: "stderr", text });
+    stderrBuffer += text;
       if (stderrBuffer.length > 64 * 1024) {
         stderrBuffer = stderrBuffer.slice(-8 * 1024);
       }
@@ -599,6 +610,7 @@ function createPersistentSession(profile) {
         const remoteCommand = requireString(command, "command", { maxLength: SAFE_COMMAND_MAX_LENGTH });
         const timeoutMs = validateTimeoutSeconds(options.timeoutSeconds) * 1000;
         const id = String(++sequence);
+        chunkEmitter = typeof options.onChunk === "function" ? options.onChunk : null;
         const startMarker = `__SSH_MANAGER_BEGIN_${id}__`;
         const endPrefix = `__SSH_MANAGER_END_${id}__:`;
         current = {

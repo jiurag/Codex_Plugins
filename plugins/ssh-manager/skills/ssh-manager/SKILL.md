@@ -69,6 +69,7 @@ description: 管理已保存的 SSH 服务器，使用本地加密凭据执行�
 - 需要完整输出（被截断、或要回溯历史）→ 调用 `ssh_log_read`：
   - `since: "30m"` 只看最近半小时；`full: true` 取未截断的 stdout/stderr；`onlyErrors: true` 只看失败。
 - 超时：只读命令默认 30 秒、变更类默认 120 秒，返回里的 `timeoutSeconds` 是实际生效值。
+- 长命令（构建、重启）可以让用户在实时操作面板里看进度：`ssh_exec` 默认把输出流式推送到面板（`stream: false` 可关）。
 - 失败后是否可重试看返回里的 `retryable`（只读为 true，变更/破坏性为 false，不要自动重试）。
 - 批量或交互式操作 → 用 `ssh_terminal_*`。
 - 文件传输与校验 → `ssh_upload` / `ssh_download`（返回里的 `verified` 表示校验是否一致，上传不一致会自动重传一次）。

@@ -9,6 +9,9 @@ let serverInfo = null;
 let operations = [];
 let terminalController = null;
 const clients = new Set();
+// 流式模式：按操作 id 暂存 stdout/stderr，供面板实时渲染与快照回放。
+const streamBuffers = new Map();
+const MAX_STREAM_CHARS = 64 * 1024;
 
 function redact(value) {
   if (typeof value !== "string") {
@@ -47,12 +50,56 @@ export function recordOperation(operation) {
   operations.push(safeOperation);
   if (operations.length > MAX_OPERATIONS) {
     operations = operations.slice(-MAX_OPERATIONS);
+    const alive = new Set(operations.map((item) => item.id));
+    for (const key of streamBuffers.keys()) {
+      if (!alive.has(key)) {
+        streamBuffers.delete(key);
+      }
+    }
   }
   const message = `event: operation\ndata: ${JSON.stringify(safeOperation)}\n\n`;
   for (const client of clients) {
     client.write(message);
   }
   return safeOperation;
+}
+
+// 追加一段实时输出并广播给面板。
+export function appendStreamChunk(operationId, { stream = "stdout", text = "" } = {}) {
+  if (!operationId || typeof text !== "string" || text === "") {
+    return;
+  }
+  const key = String(operationId);
+  let buffer = streamBuffers.get(key);
+  if (!buffer) {
+    buffer = { stdout: "", stderr: "" };
+    streamBuffers.set(key, buffer);
+  }
+  const field = stream === "stderr" ? "stderr" : "stdout";
+  buffer[field] = (buffer[field] + text).slice(-MAX_STREAM_CHARS);
+  const message = `event: chunk\ndata: ${JSON.stringify({ id: key, stream: field, text })}\n\n`;
+  for (const client of clients) {
+    client.write(message);
+  }
+}
+
+// 按 id 更新已有操作（例如把"执行中"改成"完成"）。
+export function updateOperation(operationId, patchFields = {}) {
+  const key = String(operationId);
+  const index = operations.findIndex((item) => item.id === key);
+  if (index < 0) {
+    return null;
+  }
+  operations[index] = { ...operations[index], ...sanitizeOperation(patchFields), id: key };
+  const message = `event: operation-update\ndata: ${JSON.stringify(operations[index])}\n\n`;
+  for (const client of clients) {
+    client.write(message);
+  }
+  return operations[index];
+}
+
+export function getStreamBuffer(operationId) {
+  return streamBuffers.get(String(operationId)) || null;
 }
 
 export function getDashboardStatus() {
@@ -224,7 +271,12 @@ async function handleRequest(request, response, token) {
 
   if (requestUrl.pathname === "/api/operations") {
     const limit = Math.max(1, Math.min(500, Number.parseInt(requestUrl.searchParams.get("limit") || "200", 10) || 200));
-    sendJson(response, 200, { operations: operations.slice(-limit) });
+    sendJson(response, 200, {
+      operations: operations.slice(-limit).map((item) => ({
+        ...item,
+        stream: streamBuffers.get(item.id) || null,
+      })),
+    });
     return;
   }
 
@@ -235,7 +287,11 @@ async function handleRequest(request, response, token) {
       Connection: "keep-alive",
       "X-Accel-Buffering": "no",
     });
-    response.write(`event: snapshot\ndata: ${JSON.stringify(operations.slice(-200))}\n\n`);
+    response.write(
+      `event: snapshot\ndata: ${JSON.stringify(
+        operations.slice(-200).map((item) => ({ ...item, stream: streamBuffers.get(item.id) || null })),
+      )}\n\n`,
+    );
     clients.add(response);
     const heartbeat = setInterval(() => {
       response.write(`: heartbeat ${Date.now()}\n\n`);
@@ -562,6 +618,7 @@ function textOf(op){
   return [op.alias,op.host,op.username,op.action,op.result,op.summary,JSON.stringify(op.details||{})].join(' ');
 }
 function statusClass(op){
+  if ((op.result||'').includes('执行中')) return 'warn';
   if ((op.result||'').includes('失败') || (op.result||'').includes('错误')) return 'bad';
   if ((op.result||'').includes('拒绝') || (op.result||'').includes('阻止')) return 'warn';
   return 'ok';
@@ -616,14 +673,51 @@ function render(){
       + '<div class="target">服务器　'+esc(server||op.alias||'')+'</div>'
       + '<div class="line"><span class="label">命令</span><span class="instruction">'+esc(instruction)+'</span></div>'
       + '<div class="line"><span class="label">总结</span><span class="summary-text">'+esc(summary||op.action||'')+'</span></div>'
+      + ((op.streaming || streamText(op))
+          ? '<details open><summary>实时输出</summary><pre class="stream-out" data-id="'+esc(op.id||'')+'">'+esc(streamText(op) || '（等待输出…）')+'</pre></details>'
+          : '')
       + '</article>';
   }).join('');
+}
+function streamText(op){
+  const s = op.stream || {};
+  const parts = [];
+  if (s.stdout) parts.push(s.stdout);
+  if (s.stderr) parts.push('[stderr]\n' + s.stderr);
+  return parts.join('');
 }
 function addOperation(op){operations.push(op); if(operations.length>500) operations=operations.slice(-500); refreshActionOptions(); renderSessions(); render();}
 function setConnected(on,text){conn.className='dot '+(on?'on':'off');connText.textContent=text;}
 const source = new EventSource('/events?token='+encodeURIComponent(token));
 source.addEventListener('snapshot', event => {operations=JSON.parse(event.data||'[]');refreshActionOptions();renderSessions();render();setConnected(true,'实时连接中，持续接收操作事件');});
 source.addEventListener('operation', event => {addOperation(JSON.parse(event.data));setConnected(true,'实时连接中，持续接收操作事件');});
+source.addEventListener('operation-update', event => {
+  const updated = JSON.parse(event.data||'{}');
+  const index = operations.findIndex(item => item.id === updated.id);
+  if (index >= 0) operations[index] = Object.assign({}, operations[index], updated); else operations.push(updated);
+  refreshActionOptions(); renderSessions(); render();
+  setConnected(true,'实时连接中，持续接收操作事件');
+});
+source.addEventListener('chunk', event => {
+  const payload = JSON.parse(event.data||'{}');
+  if (!payload.id) return;
+  const op = operations.find(item => item.id === payload.id);
+  if (op){
+    op.stream = op.stream || {stdout:'',stderr:''};
+    const field = payload.stream === 'stderr' ? 'stderr' : 'stdout';
+    op.stream[field] = (op.stream[field] + (payload.text||'')).slice(-200000);
+  }
+  const node = list.querySelector('pre.stream-out[data-id="' + CSS.escape(payload.id) + '"]');
+  if (node){
+    if (node.textContent === '（等待输出…）') node.textContent = '';
+    node.textContent += (payload.text||'');
+    if (node.textContent.length > 200000) node.textContent = node.textContent.slice(-200000);
+    node.scrollTop = node.scrollHeight;
+  } else {
+    render();
+  }
+  setConnected(true,'实时连接中，持续接收操作事件');
+});
 source.onerror = () => setConnected(false,'实时连接已断开，正在自动重连...');
 sessionsEl.addEventListener('click', event => {const button=event.target.closest('.session');if(!button)return;currentSession=button.dataset.session||'all';renderSessions();render();}); search.addEventListener('input', render); actionFilter.addEventListener('change', render); statusFilter.addEventListener('change', render);
 </script>
