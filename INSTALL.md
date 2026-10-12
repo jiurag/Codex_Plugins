@@ -23,6 +23,7 @@ codex plugin marketplace add jiurag/Codex_Plugins
 
 ```bash
 codex plugin add ssh-manager@jiura-plugins
+codex plugin add image-shrink@jiura-plugins
 ```
 
 ### 3. 确认安装
@@ -46,6 +47,7 @@ codex plugin list
 ```powershell
 codex plugin marketplace add "D:\路径\Codex_Plugins"
 codex plugin add ssh-manager@jiura-plugins
+codex plugin add image-shrink@jiura-plugins
 ```
 
 要点：
