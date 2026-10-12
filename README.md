@@ -7,6 +7,7 @@
 | 插件 | 版本 | 说明 |
 | --- | --- | --- |
 | [`ssh-manager`](./plugins/ssh-manager) | 0.1.2 | Codex 本地 SSH 服务器与部署管理：加密保存服务器凭据，只读命令直接执行，敏感操作确认后执行 |
+| [`image-shrink`](./plugins/image-shrink) | 0.1.0 | 把图片和截图压小后再放进上下文，避免对话请求体超过 API 体积上限（DeepSeek /responses 实测 48 MiB）导致 413 卡死会话 |
 
 ## 安装
 

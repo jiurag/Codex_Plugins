@@ -15,6 +15,18 @@
         "authentication": "ON_INSTALL"
       },
       "category": "开发工具"
+    },
+    {
+      "name": "image-shrink",
+      "source": {
+        "source": "local",
+        "path": "./plugins/image-shrink"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "实用工具"
     }
   ]
 }
