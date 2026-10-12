@@ -35,7 +35,12 @@ Codex 每次请求都会把**整段对话历史的原样**发给模型，包括�
 
 ## 工具
 
-`scripts/shrink-image.ps1`（Windows PowerShell，无需额外依赖）
+**优先用 MCP 工具**（本插件注册了 `image-shrink` MCP 服务）：
+
+- `compress_image`：压缩图片和截图。**要看任何图片之前先调用它**，然后只读压缩后的 `.small.jpg`。
+- `check_payload_budget`：估算一批图片放进请求体后的体积，以及距离 48 MiB 上限还有多远。一次要贴多张图时先用它算一下。
+
+MCP 工具不可用时，退回脚本 `scripts/shrink-image.ps1`（Windows PowerShell，无需额外依赖）：
 
 ```powershell
 # 推荐用法：自动压到目标体积以内（会自己迭代质量和尺寸）

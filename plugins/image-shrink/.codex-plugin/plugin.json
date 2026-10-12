@@ -1,6 +1,6 @@
 {
   "name": "image-shrink",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "把图片和截图压小后再放进上下文，避免对话请求体超过 API 体积上限（DeepSeek /responses 实测 48 MiB，超限返回 413）导致整个会话卡死。",
   "author": {
     "name": "jiurag"
@@ -12,13 +12,15 @@
     "压缩",
     "413",
     "请求体",
+    "MCP",
     "Codex 插件"
   ],
   "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "图片体积守卫",
     "shortDescription": "压缩图片和截图后再使用，避免请求体超上限报 413",
-    "longDescription": "Codex 每次请求都会把整段对话历史的原样发给模型，包括历史里出现过的每一张图。图片在请求体里是 base64，体积约为源文件的 1.33 倍，而且每一轮都要重发一遍。实测 DeepSeek /responses 的请求体上限是 48 MiB，超限直接返回 413 Payload Too Large，整个会话无法继续。本插件提供压缩工具和一套规则：自己截图和读取图片之前先压缩，会话里图片累积较多时提醒用户开新会话，遇到 413 不重试而是直接说明需要新开会话。附带一个黑盒探测脚本，可测出任意 Responses 端点的请求体上限。",
+    "longDescription": "Codex 每次请求都会把整段对话历史的原样发给模型，包括历史里出现过的每一张图。图片在请求体里是 base64，体积约为源文件的 1.33 倍，而且每一轮都要重发一遍。实测 DeepSeek /responses 的请求体上限是 48 MiB，超限直接返回 413 Payload Too Large，整个会话无法继续。插件提供两个 MCP 工具（compress_image 压缩图片、check_payload_budget 估算请求体体积）和一套规则：自己截图和读取图片之前先压缩，会话里图片累积较多时提醒用户开新会话，遇到 413 不重试而是直接说明需要新开会话。附带一个黑盒探测脚本，可测出任意 Responses 端点的请求体上限。",
     "developerName": "jiurag",
     "category": "实用工具",
     "capabilities": [

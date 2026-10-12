@@ -1,4 +1,4 @@
-<#
+﻿<#
   压缩图片 / 截图，用来避开 API 请求体的体积上限。
   背景与实测数据见本 skill 的 references/limits.md。
 

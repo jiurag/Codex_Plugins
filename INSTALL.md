@@ -1,6 +1,13 @@
 # 安装说明
 
-本仓库是 Codex 插件市场（marketplace），包含 `ssh-manager` 插件。
+本仓库是 Codex 插件市场（marketplace），当前包含两个插件：
+
+| 插件 | 说明 |
+| --- | --- |
+| `ssh-manager` | SSH 服务器与部署管理 |
+| `image-shrink` | 图片体积守卫：压缩截图，避免请求体超 48 MiB 报 413 |
+
+下面的安装步骤对两个插件都适用，把插件名换掉即可。
 
 ---
 
@@ -54,7 +61,7 @@ codex plugin add ssh-manager@jiura-plugins
 ```powershell
 codex --version     # Codex CLI 0.161+（或 Codex 桌面版）
 node -v             # 必须有 Node.js（建议 18+）
-ssh -V              # 系统 OpenSSH 客户端
+ssh -V              # 系统 OpenSSH 客户端（仅 ssh-manager 需要；image-shrink 只需 Node 和 Windows）
 ```
 
 三者缺一不可。
