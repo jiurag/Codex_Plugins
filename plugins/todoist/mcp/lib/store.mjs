@@ -105,6 +105,27 @@ export function readSessionLabels(sessionIds = []) {
   return labels;
 }
 
+export function findTranscriptForSession(sessionId) {
+  const target = String(sessionId || "").trim();
+  if (!target) return null;
+  const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
+  const root = path.join(codexHome, "sessions");
+  const found = [];
+  const walk = (dir) => {
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) { walk(full); continue; }
+      if (!entry.isFile() || !entry.name.endsWith(".jsonl") || !entry.name.includes(target)) continue;
+      try { found.push({ path: full, mtime: fs.statSync(full).mtimeMs }); } catch {}
+    }
+  };
+  walk(root);
+  found.sort((a, b) => b.mtime - a.mtime);
+  return found.length > 0 ? found[0].path : null;
+}
+
 export function readAssistantTextForTurn(transcriptPath, turnId = null) {
   if (!transcriptPath) return "";
   try {

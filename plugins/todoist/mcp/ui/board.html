@@ -463,7 +463,7 @@
     function notify(method, params) { window.parent.postMessage({ jsonrpc: "2.0", method, params }, "*"); }
     async function connect() {
       if (window.parent === window) throw new Error("not-embedded");
-      const params = { appCapabilities: { availableDisplayModes: ["inline", "fullscreen"] }, appInfo: { name: "Todoist", version: "0.8.0" }, protocolVersion: "2026-01-26" };
+      const params = { appCapabilities: { availableDisplayModes: ["inline", "fullscreen"] }, appInfo: { name: "Todoist", version: "0.8.1" }, protocolVersion: "2026-01-26" };
       let result;
       try { result = await request("ui/initialize", params, 4000); } catch { result = await request("ui/initialize", params, 4000); }
       notify("ui/notifications/initialized", {});

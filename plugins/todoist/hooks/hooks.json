@@ -48,7 +48,6 @@
             "tool": "todoist_sync_plan_from_text",
             "input": {
               "text": "${last_assistant_message}",
-              "transcript_path": "${transcript_path}",
               "session_id": "${session_id}",
               "turn_id": "${turn_id}"
             },

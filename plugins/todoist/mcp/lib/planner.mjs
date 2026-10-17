@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { readAssistantTextForTurn, readConfig, readSessionLabels, readState, writeState } from "./store.mjs";
+import { findTranscriptForSession, readAssistantTextForTurn, readConfig, readSessionLabels, readState, writeState } from "./store.mjs";
 import * as todoist from "./todoist.mjs";
 
 export function planKey(sessionId, step) {
@@ -801,8 +801,9 @@ export function extractPlanFromText(text) {
 
 export async function syncPlanFromText({ text, transcriptPath = null, sessionId = "default", turnId = null } = {}) {
   let steps = extractPlanFromText(text);
-  if (steps.length === 0 && transcriptPath) {
-    steps = extractPlanFromText(readAssistantTextForTurn(transcriptPath, turnId));
+  if (steps.length === 0) {
+    const pathFromSession = transcriptPath || findTranscriptForSession(sessionId);
+    if (pathFromSession) steps = extractPlanFromText(readAssistantTextForTurn(pathFromSession, turnId));
   }
   if (steps.length > 0) {
     return syncPlan({ steps, sessionId, turnId, source: "hook-text" });
