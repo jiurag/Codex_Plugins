@@ -7,7 +7,7 @@
 | 插件 | 版本 | 说明 |
 | --- | --- | --- |
 | [`ssh-manager`](./plugins/ssh-manager) | 0.3.3 | Codex 本地 SSH 服务器与部署管理：加密保存服务器凭据，只读命令直接执行，敏感操作确认后执行 |
-| [`todoist`](./plugins/todoist) | 0.6.0 | 任务清单：本地待办 + 可选 Todoist 同步，支持项目、标签、搜索筛选、拖拽排序、/plan 联动 |
+| [`todoist`](./plugins/todoist) | 0.6.1 | 任务清单：本地待办 + 可选 Todoist 同步，支持项目、标签、搜索筛选、拖拽排序、/plan 联动 |
 
 ## 安装
 

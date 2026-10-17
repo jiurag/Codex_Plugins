@@ -449,7 +449,7 @@
   </div>
   <div class="quick-add-meta">
     <span id="lastPlanHint" class="hint">在对话里说「同步计划到 Todoist」</span>
-    <button id="syncPlanBtn" class="text-btn" type="button" disabled>同步最新计划</button>
+    <button id="syncPlanBtn" class="text-btn" type="button" disabled>立即同步</button>
   </div>
 
   <main id="content">
@@ -567,7 +567,7 @@
       if (window.parent === window) throw new Error("not-embedded");
       const params = {
         appCapabilities: { availableDisplayModes: ["inline", "fullscreen"] },
-        appInfo: { name: "Todoist", version: "0.6.0" },
+        appInfo: { name: "Todoist", version: "0.6.1" },
         protocolVersion: "2026-01-26",
       };
       let result;
@@ -956,7 +956,7 @@
       hint.textContent = "最新计划 " + last.steps.length + " 步" + (time ? " · " + time : "");
       syncBtn.disabled = false;
     } else {
-      hint.textContent = "在对话里说「同步计划到 Todoist」";
+      hint.textContent = "计划会自动同步到 Todoist";
       syncBtn.disabled = true;
     }
   }
