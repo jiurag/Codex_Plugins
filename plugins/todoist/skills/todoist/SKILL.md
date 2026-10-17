@@ -31,11 +31,12 @@ description: 把 Codex 的计划步骤同步成 Todoist 任务，并在侧边栏
 规则：
 
 1. 同一会话里，同样的步骤文字重复同步不会重复建任务。
-2. 步骤完成后把 `status` 改成 `completed`，插件会自动去 Todoist 勾掉。
+2. **每完成一个步骤就立即回写状态**：不要等全部结束、不要等用户提醒。重新调用 `todoist_sync_plan`，传完整步骤列表；刚完成的步骤设为 `completed`，当前步骤设为 `inProgress`，后面的步骤保持 `pending`。插件会自动勾掉完成项。
 3. 不要一次建一堆模糊的大任务，尽量拆成能勾掉的小步骤。
 4. 如果计划有变化，重新调用一次完整步骤列表，不要只传新增的。
 5. 多会话场景下优先用 `todoist_sync_plan` 并传当前 `session_id`；`todoist_sync_last_plan` 默认同步最新一份计划，传 `session_id` 才同步指定会话。
 6. `UserPromptSubmit` 钩子会先检查用户提交的 prompt；点击“实现这个计划”或提交带「计划 / Plan / 步骤」的内容时立即同步。`Stop` 钩子会先读最后消息；如果是 Plan 模式、最后消息为空，则从当前 turn 的 transcript 读取 `<proposed_plan>` 并同步。普通回复不会重放旧计划。
+7. 如果无法确认某一步真的完成，不要猜着标 `completed`；保持原状态，并如实说明。
 
 ## 查看清单
 

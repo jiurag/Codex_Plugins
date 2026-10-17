@@ -20,7 +20,7 @@ import {
 import { readConfig, readState } from "./lib/store.mjs";
 
 const SERVER_NAME = "todoist";
-const SERVER_VERSION = "0.8.1";
+const SERVER_VERSION = "0.8.2";
 const BOARD_URI = "ui://todoist/board.html";
 const BOARD_ICON = {
   src: "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IiM4ZjhmOGYiIHN0cm9rZS13aWR0aD0iMS43IiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxyZWN0IHg9IjMuNSIgeT0iMy41IiB3aWR0aD0iMTciIGhlaWdodD0iMTciIHJ4PSI1Ii8+PHBhdGggZD0ibTggMTIuMiAyLjYgMi42TDE2LjUgOSIvPjwvc3ZnPg==",
@@ -216,7 +216,7 @@ const TOOLS = [
     name: "todoist_sync_plan",
     title: "同步计划到 Todoist",
     description:
-      "把一组计划步骤同步成 Todoist 任务：缺失的创建，已完成的自动勾掉。步骤格式为 [{step, status}]，status 可为 pending、inProgress、completed。重复调用不会重复建任务。",
+      "把一组计划步骤同步成 Todoist 任务：缺失的创建，已完成的自动勾掉。步骤格式为 [{step, status}]，status 可为 pending、inProgress、completed。Codex 每完成一步都应立即传入完整步骤列表并更新 status；重复调用不会重复建任务。",
     inputSchema: {
       type: "object",
       properties: {
