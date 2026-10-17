@@ -1,6 +1,6 @@
 {
   "name": "todoist",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "把 Codex 的计划步骤同步成 Todoist 任务，并在侧边栏任务清单里查看哪些做了、哪些没做。",
   "author": {
     "name": "jiurag"
@@ -18,7 +18,7 @@
     "category": "效率工具",
     "capabilities": ["Read", "Write", "Interactive"],
     "defaultPrompt": ["打开任务清单", "新建一个项目", "把当前计划同步到 Todoist"],
-    "brandColor": "#E44332",
+    "brandColor": "#339cff",
     "composerIcon": "./assets/icon-small.svg",
     "logo": "./assets/icon.svg"
   }

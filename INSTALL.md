@@ -5,7 +5,6 @@
 | 插件 | 说明 |
 | --- | --- |
 | `ssh-manager` | SSH 服务器与部署管理 |
-| `image-shrink` | 图片体积守卫：压缩截图，避免请求体超 48 MiB 报 413 |
 | `todoist` | 任务清单：本地待办 + 可选 Todoist 同步 |
 
 下面的安装步骤对两个插件都适用，把插件名换掉即可。
@@ -24,7 +23,6 @@ codex plugin marketplace add jiurag/Codex_Plugins
 
 ```bash
 codex plugin add ssh-manager@jiura-plugins
-codex plugin add image-shrink@jiura-plugins
 codex plugin add todoist@jiura-plugins
 ```
 
@@ -34,7 +32,7 @@ codex plugin add todoist@jiura-plugins
 codex plugin list
 ```
 
-应看到 `ssh-manager@jiura-plugins  installed, enabled  0.1.2`。
+应看到 `ssh-manager@jiura-plugins  installed, enabled  0.3.3`。
 
 ### 4. 重新加载
 
@@ -49,7 +47,6 @@ codex plugin list
 ```powershell
 codex plugin marketplace add "D:\路径\Codex_Plugins"
 codex plugin add ssh-manager@jiura-plugins
-codex plugin add image-shrink@jiura-plugins
 codex plugin add todoist@jiura-plugins
 ```
 
@@ -66,7 +63,7 @@ codex plugin add todoist@jiura-plugins
 ```powershell
 codex --version     # Codex CLI 0.161+（或 Codex 桌面版）
 node -v             # 必须有 Node.js（建议 18+）
-ssh -V              # 系统 OpenSSH 客户端（仅 ssh-manager 需要；image-shrink 只需 Node 和 Windows）
+ssh -V              # 系统 OpenSSH 客户端（仅 ssh-manager 需要）
 ```
 
 三者缺一不可。

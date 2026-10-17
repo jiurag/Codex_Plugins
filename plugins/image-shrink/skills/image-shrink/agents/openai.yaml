@@ -1,8 +1,0 @@
-interface:
-  display_name: "图片体积守卫"
-  short_description: "压缩图片和截图后再使用，避免请求体超上限报 413"
-  brand_color: "#F97316"
-  default_prompt: "Use $image-shrink to compress these screenshots before reading them."
-
-policy:
-  allow_implicit_invocation: true

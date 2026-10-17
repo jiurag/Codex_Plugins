@@ -6,9 +6,8 @@
 
 | 插件 | 版本 | 说明 |
 | --- | --- | --- |
-| [`ssh-manager`](./plugins/ssh-manager) | 0.1.2 | Codex 本地 SSH 服务器与部署管理：加密保存服务器凭据，只读命令直接执行，敏感操作确认后执行 |
-| [`image-shrink`](./plugins/image-shrink) | 0.2.0 | 把图片和截图压小后再放进上下文，压缩图片和截图（提供 compress_image / check_payload_budget 两个 MCP 工具），避免对话请求体超过 API 体积上限（DeepSeek /responses 实测 48 MiB）导致 413 卡死会话 |
-| [`todoist`](./plugins/todoist) | 0.4.5 | 任务清单：本地待办 + 可选 Todoist 同步，支持项目、标签、搜索筛选、拖拽排序、/plan 联动 |
+| [`ssh-manager`](./plugins/ssh-manager) | 0.3.3 | Codex 本地 SSH 服务器与部署管理：加密保存服务器凭据，只读命令直接执行，敏感操作确认后执行 |
+| [`todoist`](./plugins/todoist) | 0.5.1 | 任务清单：本地待办 + 可选 Todoist 同步，支持项目、标签、搜索筛选、拖拽排序、/plan 联动 |
 
 ## 安装
 
@@ -22,7 +21,6 @@ codex plugin marketplace add jiurag/Codex_Plugins
 
 ```bash
 codex plugin add ssh-manager@jiura-plugins
-codex plugin add image-shrink@jiura-plugins
 codex plugin add todoist@jiura-plugins
 ```
 

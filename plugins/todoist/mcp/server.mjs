@@ -17,10 +17,10 @@ import {
 import { readConfig } from "./lib/store.mjs";
 
 const SERVER_NAME = "todoist";
-const SERVER_VERSION = "0.5.0";
+const SERVER_VERSION = "0.5.1";
 const BOARD_URI = "ui://todoist/board.html";
 const BOARD_ICON = {
-  src: "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IiMzMzljZmYiIHN0cm9rZS13aWR0aD0iMiIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIj48cGF0aCBkPSJNOSAxMWwzIDMgOC04Ii8+PHBhdGggZD0iTTIwIDEydjZhMiAyIDAgMCAxLTIgMkg2YTIgMiAwIDAgMS0yLTJWNmEyIDIgMCAwIDEgMi0yaDkiLz48L3N2Zz4=",
+  src: "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IiM4ZjhmOGYiIHN0cm9rZS13aWR0aD0iMS43IiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxyZWN0IHg9IjMuNSIgeT0iMy41IiB3aWR0aD0iMTciIGhlaWdodD0iMTciIHJ4PSI1Ii8+PHBhdGggZD0ibTggMTIuMiAyLjYgMi42TDE2LjUgOSIvPjwvc3ZnPg==",
   mimeType: "image/svg+xml",
   sizes: ["24x24"],
 };
