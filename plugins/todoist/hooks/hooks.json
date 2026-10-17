@@ -27,9 +27,11 @@
           {
             "type": "mcp_tool",
             "server": "todoist",
-            "tool": "todoist_sync_last_plan",
+            "tool": "todoist_sync_plan_from_text",
             "input": {
-              "session_id": "${session_id}"
+              "text": "${last_assistant_message}",
+              "session_id": "${session_id}",
+              "turn_id": "${turn_id}"
             },
             "timeout": 20,
             "statusMessage": "同步本会话计划到 Todoist"

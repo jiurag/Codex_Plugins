@@ -1,4 +1,6 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
+import http from "node:http";
 import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
@@ -12,12 +14,13 @@ import {
   setTaskDone,
   syncLastPlan,
   syncPlan,
+  syncPlanFromText,
   updateTask,
 } from "./lib/planner.mjs";
 import { readConfig } from "./lib/store.mjs";
 
 const SERVER_NAME = "todoist";
-const SERVER_VERSION = "0.5.1";
+const SERVER_VERSION = "0.6.0";
 const BOARD_URI = "ui://todoist/board.html";
 const BOARD_ICON = {
   src: "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IiM4ZjhmOGYiIHN0cm9rZS13aWR0aD0iMS43IiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxyZWN0IHg9IjMuNSIgeT0iMy41IiB3aWR0aD0iMTciIGhlaWdodD0iMTciIHJ4PSI1Ii8+PHBhdGggZD0ibTggMTIuMiAyLjYgMi42TDE2LjUgOSIvPjwvc3ZnPg==",
@@ -25,6 +28,64 @@ const BOARD_ICON = {
   sizes: ["24x24"],
 };
 const HERE = path.dirname(fileURLToPath(import.meta.url));
+const SSE_TOKEN = crypto.randomBytes(16).toString("hex");
+let ssePort = 0;
+const sseClients = new Set();
+const sseReady = new Promise((resolve) => {
+  const server = http.createServer((req, res) => {
+    const url = new URL(req.url || "/", "http://127.0.0.1");
+    if (url.pathname !== `/events/${SSE_TOKEN}`) {
+      res.writeHead(404);
+      res.end("not found");
+      return;
+    }
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "Access-Control-Allow-Origin": "*",
+    });
+    res.write("retry: 2000\n\n");
+    sseClients.add(res);
+    const ping = setInterval(() => {
+      try { res.write(": ping\n\n"); } catch {}
+    }, 25000);
+    req.on("close", () => {
+      clearInterval(ping);
+      sseClients.delete(res);
+    });
+  });
+  server.on("error", (error) => {
+    process.stderr.write(`[todoist] live server failed: ${error.message}\n`);
+    resolve();
+  });
+  server.listen(0, "127.0.0.1", () => {
+    ssePort = server.address().port;
+    resolve();
+  });
+  server.unref?.();
+});
+
+function broadcastChange(reason) {
+  const payload = `event: changed\ndata: ${JSON.stringify({ reason, at: Date.now() })}\n\n`;
+  for (const res of sseClients) {
+    try {
+      res.write(payload);
+    } catch {
+      sseClients.delete(res);
+    }
+  }
+}
+
+function boardUiMeta() {
+  return {
+    ui: { csp: { connectDomains: [`http://127.0.0.1:${ssePort}`] } },
+    "openai/ui": {
+      preferredDisplayMode: "fullscreen",
+      availableDisplayModes: ["inline", "fullscreen"],
+    },
+  };
+}
 
 const JsonRpcError = {
   METHOD_NOT_FOUND: -32601,
@@ -44,7 +105,7 @@ function sendError(id, code, message) {
   send({ jsonrpc: "2.0", id, error: { code, message } });
 }
 
-function toolResult(id, payload, { isError = false } = {}) {
+function sendToolResult(id, payload, { isError = false } = {}) {
   const text =
     typeof payload === "string"
       ? payload
@@ -208,7 +269,24 @@ const TOOLS = [
       additionalProperties: true,
     },
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
-  },  {
+  },
+  {
+    name: "todoist_sync_plan_from_text",
+    title: "同步计划文本（钩子）",
+    description:
+      "供 Stop 钩子调用：从最后一条助手消息里提取计划清单并同步；没有可提取的计划时，回退到本会话最近一次计划。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        text: { type: "string", description: "最后一条助手消息" },
+        session_id: { type: "string" },
+        turn_id: { type: "string" },
+      },
+      additionalProperties: true,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+  },
+  {
     name: "todoist_update_task",
     title: "编辑任务",
     description: "修改任务内容、截止日期或优先级。priority 为 1-4，1 最高；due_date 用 YYYY-MM-DD，传空字符串表示清除日期。",
@@ -295,12 +373,39 @@ const TOOLS = [
 ];
 
 function readBoardHtml() {
-  return fs.readFileSync(path.join(HERE, "ui", "board.html"), "utf8");
+  return fs
+    .readFileSync(path.join(HERE, "ui", "board.html"), "utf8")
+    .replaceAll("__SSE_PORT__", String(ssePort))
+    .replaceAll("__SSE_TOKEN__", SSE_TOKEN);
+}
+
+let currentToolName = null;
+const MUTATION_TOOLS = new Set([
+  "todoist_add_task",
+  "todoist_complete_task",
+  "todoist_reopen_task",
+  "todoist_update_task",
+  "todoist_delete_task",
+  "todoist_reorder_tasks",
+  "todoist_sync_plan",
+  "todoist_sync_last_plan",
+  "todoist_sync_plan_from_hook",
+  "todoist_sync_plan_from_text",
+  "todoist_set_project",
+  "todoist_create_project",
+]);
+
+function toolResult(id, payload, options) {
+  if (!options?.isError && currentToolName && MUTATION_TOOLS.has(currentToolName)) {
+    broadcastChange(currentToolName);
+  }
+  return sendToolResult(id, payload, options);
 }
 
 async function handleToolCall(id, params) {
   const name = params?.name;
   const args = params?.arguments && typeof params.arguments === "object" ? params.arguments : {};
+  currentToolName = name;
 
   try {
     switch (name) {
@@ -353,6 +458,16 @@ async function handleToolCall(id, params) {
           }),
         );
       }
+      case "todoist_sync_plan_from_text":
+        return toolResult(
+          id,
+          await syncPlanFromText({
+            text: args.text,
+            sessionId: args.session_id || "hook",
+            turnId: args.turn_id || null,
+          }),
+        );
+
       case "todoist_update_task":
         return toolResult(
           id,
@@ -393,6 +508,8 @@ async function handleToolCall(id, params) {
     const message = error instanceof Error ? error.message : String(error);
     process.stderr.write(`[todoist] tool ${name} failed: ${message}\n`);
     return toolResult(id, { ok: false, error: message }, { isError: true });
+  } finally {
+    currentToolName = null;
   }
 }
 
@@ -426,6 +543,7 @@ async function handleRequest(message) {
   }
 
   if (method === "resources/list") {
+    await sseReady;
     sendResult(id, {
       resources: [
         {
@@ -433,12 +551,7 @@ async function handleRequest(message) {
           name: "Todoist 面板",
           description: "查看任务完成情况、添加任务、勾选完成。",
           mimeType: "text/html;profile=mcp-app",
-          _meta: {
-            "openai/ui": {
-              preferredDisplayMode: "fullscreen",
-              availableDisplayModes: ["inline", "fullscreen"],
-            },
-          },
+          _meta: boardUiMeta(),
         },
       ],
     });
@@ -451,18 +564,14 @@ async function handleRequest(message) {
       sendError(id, JsonRpcError.INVALID_PARAMS, `未知资源：${uri}`);
       return;
     }
+    await sseReady;
     sendResult(id, {
       contents: [
         {
           uri: BOARD_URI,
           mimeType: "text/html;profile=mcp-app",
           text: readBoardHtml(),
-          _meta: {
-            "openai/ui": {
-              preferredDisplayMode: "fullscreen",
-              availableDisplayModes: ["inline", "fullscreen"],
-            },
-          },
+          _meta: boardUiMeta(),
         },
       ],
     });

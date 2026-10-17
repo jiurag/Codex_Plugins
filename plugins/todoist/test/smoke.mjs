@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import http from "node:http";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import fs from "node:fs";
@@ -68,6 +69,28 @@ function tool(name, args = {}) {
   });
 }
 
+function openSse(url) {
+  return new Promise((resolve, reject) => {
+    const request = http.get(url, (response) => {
+      assert.equal(response.statusCode, 200);
+      let data = "";
+      response.setEncoding("utf8");
+      response.on("data", (chunk) => { data += chunk; });
+      resolve({ request, response, getData: () => data });
+    });
+    request.on("error", reject);
+  });
+}
+
+async function waitUntil(check, timeout = 3000) {
+  const started = Date.now();
+  while (Date.now() - started < timeout) {
+    if (check()) return;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error("waitUntil timeout");
+}
+
 const init = await rpc("initialize", {
   protocolVersion: "2025-06-18",
   capabilities: {},
@@ -85,10 +108,12 @@ for (const name of ["todoist_open_board", "todoist_board_data", "todoist_add_tas
   assert.ok(names.includes(name), "missing tool " + name);
 }
 const openBoard = tools.tools.find((item) => item.name === "todoist_open_board");
+assert.equal(openBoard.title, "Todoist");
 assert.equal(openBoard._meta.ui.resourceUri, "ui://todoist/board.html");
 assert.ok(Array.isArray(openBoard.icons) && openBoard.icons.length > 0, "tool icons missing");
 const globalEntry = openBoard._meta["openai/ui"].entrypoints.find((item) => item.type === "global");
 assert.ok(globalEntry);
+assert.equal(globalEntry.quickAction.title, "打开 Todoist");
 assert.ok(Array.isArray(globalEntry.quickAction.icons) && globalEntry.quickAction.icons.length > 0, "quickAction icons missing");
 assert.ok(openBoard._meta["openai/ui"].entrypoints.some((item) => item.type === "thread"));
 console.log("PASS tools/list");
@@ -101,6 +126,25 @@ const html = read.contents[0].text;
 assert.ok(html.length > 10000, "board html too small");
 assert.ok(html.includes("ui/initialize"));
 assert.ok(html.includes("tools/call"));
+const liveConfig = html.match(/const LIVE_CONFIG = \{ port: Number\("(\d+)"\), token: "([^"]+)" \};/);
+assert.ok(liveConfig, "live config missing");
+const sse = await openSse(`http://127.0.0.1:${liveConfig[1]}/events/${liveConfig[2]}`);
+const sseTask = await tool("todoist_add_task", { content: "SSE 测试任务" });
+await waitUntil(() => sse.getData().includes("event: changed"));
+sse.request.destroy();
+await tool("todoist_delete_task", { task_id: sseTask.structuredContent.id });
+console.log("PASS live refresh");
+
+const textPlan = "## 计划\n1. 文本步骤 A\n2. 文本步骤 B";
+const textSync = await tool("todoist_sync_plan_from_text", { text: textPlan, session_id: "text-test" });
+assert.equal(textSync.structuredContent.created, 2);
+const textSyncAgain = await tool("todoist_sync_plan_from_text", { text: textPlan, session_id: "text-test" });
+assert.equal(textSyncAgain.structuredContent.created, 0);
+const textBoard = (await tool("todoist_board_data")).structuredContent;
+const textTasks = textBoard.tasks.filter((item) => item.content.startsWith("文本步骤"));
+assert.equal(textTasks.length, 2);
+for (const item of textTasks) await tool("todoist_delete_task", { task_id: item.id });
+console.log("PASS text plan auto-sync");
 console.log("PASS resources/read");
 
 const plan = [

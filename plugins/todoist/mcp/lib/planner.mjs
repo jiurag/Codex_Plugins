@@ -729,3 +729,50 @@ export async function syncLastPlan(sessionId = null) {
     source: "manual",
   });
 }
+export function extractPlanFromText(text) {
+  const lines = String(text || "").replace(/\r\n/g, "\n").split("\n");
+  const steps = [];
+  let inCode = false;
+  let inPlan = false;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (/^```/.test(trimmed)) {
+      inCode = !inCode;
+      continue;
+    }
+    if (inCode || !trimmed) continue;
+
+    if (/^#{1,6}\s*(计划|plan|步骤|steps)(?:\s|$|[:：])/i.test(trimmed) || /^(计划|plan|步骤|steps)[:：]?\s*$/i.test(trimmed)) {
+      inPlan = true;
+      continue;
+    }
+    if (inPlan && /^#{1,6}\s+/.test(trimmed) && !/计划|plan|步骤|steps/i.test(trimmed)) {
+      inPlan = false;
+    }
+
+    const checkbox = trimmed.match(/^[-*]\s*\[( |x|X)\]\s+(.+?)\s*$/);
+    if (checkbox) {
+      steps.push({
+        step: checkbox[2],
+        status: checkbox[1].toLowerCase() === "x" ? "completed" : "pending",
+      });
+      continue;
+    }
+
+    if (inPlan) {
+      const numbered = trimmed.match(/^\d+[.)]\s+(.+?)\s*$/);
+      if (numbered) steps.push({ step: numbered[1], status: "pending" });
+    }
+  }
+
+  return steps.slice(0, 50);
+}
+
+export async function syncPlanFromText({ text, sessionId = "default", turnId = null } = {}) {
+  const steps = extractPlanFromText(text);
+  if (steps.length > 0) {
+    return syncPlan({ steps, sessionId, turnId, source: "hook-text" });
+  }
+  return syncLastPlan(sessionId);
+}

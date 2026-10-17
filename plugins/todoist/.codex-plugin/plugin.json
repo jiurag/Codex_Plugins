@@ -1,6 +1,6 @@
 {
   "name": "todoist",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "把 Codex 的计划步骤同步成 Todoist 任务，并在侧边栏任务清单里查看哪些做了、哪些没做。",
   "author": {
     "name": "jiurag"
