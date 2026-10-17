@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "todoist-planner": {
+      "command": "node",
+      "args": ["./mcp/server.mjs"],
+      "cwd": ".",
+      "tool_timeout_sec": 60
+    }
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "description": "把 Codex 的 update_plan 计划自动同步到 Todoist，并在每轮结束时兜底同步本会话计划",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "^(update_plan|plan)$",
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "todoist-planner",
+            "tool": "todoist_sync_plan_from_hook",
+            "input": {
+              "steps": "${tool_input.plan}",
+              "raw": "${tool_input}",
+              "session_id": "${session_id}",
+              "turn_id": "${turn_id}"
+            },
+            "timeout": 20,
+            "statusMessage": "同步计划到 Todoist"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "todoist-planner",
+            "tool": "todoist_sync_last_plan",
+            "input": {
+              "session_id": "${session_id}"
+            },
+            "timeout": 20,
+            "statusMessage": "同步本会话计划到 Todoist"
+          }
+        ]
+      }
+    ]
+  }
+}

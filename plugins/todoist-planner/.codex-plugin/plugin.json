@@ -1,0 +1,25 @@
+{
+  "name": "todoist-planner",
+  "version": "0.4.5",
+  "description": "把 Codex 的计划步骤同步成 Todoist 任务，并在侧边栏任务清单里查看哪些做了、哪些没做。",
+  "author": {
+    "name": "jiurag"
+  },
+  "license": "MIT",
+  "keywords": ["Todoist", "待办", "任务清单", "Codex", "plan"],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "hooks": "./hooks/hooks.json",
+  "interface": {
+    "displayName": "任务清单",
+    "shortDescription": "本地待办 + 可选 Todoist 同步，不需要登录",
+    "longDescription": "把 Codex 的 /plan 计划步骤同步成 Todoist 任务：新步骤自动创建，完成的步骤自动勾掉，重复同步不会重复建任务。插件提供一个 MCP App 面板，可以从 Codex 侧边栏或对话侧栏打开，查看进行中/已完成任务、添加任务、勾选完成。未配置 Token 时使用本地演示模式，配置后直接读写你的 Todoist 账号。",
+    "developerName": "jiurag",
+    "category": "效率工具",
+    "capabilities": ["Read", "Write", "Interactive"],
+    "defaultPrompt": ["打开任务清单", "新建一个项目", "把当前计划同步到 Todoist"],
+    "brandColor": "#E44332",
+    "composerIcon": "./assets/icon-small.svg",
+    "logo": "./assets/icon.svg"
+  }
+}
