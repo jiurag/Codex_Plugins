@@ -163,6 +163,21 @@ const noPlanBoard = (await tool("todoist_board_data")).structuredContent;
 assert.equal(noPlanBoard.stats.total, 0, "non-plan text must not resurrect the last plan");
 console.log("PASS no-plan text does not resync");
 console.log("PASS text plan auto-sync");
+const transcriptPath = path.join(dataDir, "transcript.jsonl");
+const transcriptLines = [
+  { type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "text", text: "<proposed_plan>\n# Transcript Plan\n\n## 计划\n1. transcript 步骤 A\n2. transcript 步骤 B\n3. transcript 步骤 C\n</proposed_plan>" }], internal_chat_message_metadata_passthrough: { turn_id: "transcript-turn" } } },
+  { type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "text", text: "普通回复，没有计划" }], internal_chat_message_metadata_passthrough: { turn_id: "other-turn" } } }
+];
+fs.writeFileSync(transcriptPath, transcriptLines.map(JSON.stringify).join("\n"), "utf8");
+const transcriptSync = await tool("todoist_sync_plan_from_text", { text: "", transcript_path: transcriptPath, session_id: "transcript-test", turn_id: "transcript-turn" });
+assert.equal(transcriptSync.structuredContent.created, 3);
+const transcriptBoard = (await tool("todoist_board_data")).structuredContent;
+const transcriptTasks = transcriptBoard.tasks.filter((item) => item.content.startsWith("transcript 步骤"));
+assert.equal(transcriptTasks.length, 3);
+const staleTurn = await tool("todoist_sync_plan_from_text", { text: "", transcript_path: transcriptPath, session_id: "transcript-test", turn_id: "other-turn" });
+assert.equal(staleTurn.structuredContent.skipped, true);
+for (const item of transcriptTasks) await tool("todoist_delete_task", { task_id: item.id });
+console.log("PASS transcript plan sync");
 const implementationPrompt = "PLEASE IMPLEMENT THIS PLAN:\n# 三步验收\n\n## 计划\n1. 用户提交步骤 A\n2. 用户提交步骤 B\n3. 用户提交步骤 C";
 const promptSync = await tool("todoist_sync_plan_from_text", { text: implementationPrompt, session_id: "prompt-test" });
 assert.equal(promptSync.structuredContent.created, 3);

@@ -105,6 +105,30 @@ export function readSessionLabels(sessionIds = []) {
   return labels;
 }
 
+export function readAssistantTextForTurn(transcriptPath, turnId = null) {
+  if (!transcriptPath) return "";
+  try {
+    const lines = fs.readFileSync(transcriptPath, "utf8").split(/\r?\n/);
+    const messages = [];
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const obj = JSON.parse(line);
+        const payload = obj && obj.payload;
+        if (!payload || payload.type !== "message" || payload.role !== "assistant") continue;
+        const meta = payload.internal_chat_message_metadata_passthrough || obj.metadata?.internal_chat_message_metadata_passthrough;
+        const messageTurn = meta && meta.turn_id ? String(meta.turn_id) : "";
+        if (turnId && messageTurn && messageTurn !== String(turnId)) continue;
+        const text = Array.isArray(payload.content)
+          ? payload.content.map((item) => item && typeof item.text === "string" ? item.text : "").join("\n")
+          : "";
+        if (text.trim()) messages.push(text);
+      } catch {}
+    }
+    return messages.join("\n\n");
+  } catch { return ""; }
+}
+
 export function readConfig() {
   const cfg = readJson(configPath(), {});
   const token = String(process.env.TODOIST_API_TOKEN || cfg.token || "").trim();

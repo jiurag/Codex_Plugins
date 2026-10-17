@@ -20,7 +20,7 @@ import {
 import { readConfig, readState } from "./lib/store.mjs";
 
 const SERVER_NAME = "todoist";
-const SERVER_VERSION = "0.7.0";
+const SERVER_VERSION = "0.8.0";
 const BOARD_URI = "ui://todoist/board.html";
 const BOARD_ICON = {
   src: "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IiM4ZjhmOGYiIHN0cm9rZS13aWR0aD0iMS43IiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxyZWN0IHg9IjMuNSIgeT0iMy41IiB3aWR0aD0iMTciIGhlaWdodD0iMTciIHJ4PSI1Ii8+PHBhdGggZD0ibTggMTIuMiAyLjYgMi42TDE2LjUgOSIvPjwvc3ZnPg==",
@@ -286,6 +286,7 @@ const TOOLS = [
       type: "object",
       properties: {
         text: { type: "string", description: "最后一条助手消息" },
+        transcript_path: { type: "string", description: "当前 Codex 会话 transcript 路径" },
         session_id: { type: "string" },
         turn_id: { type: "string" },
       },
@@ -475,6 +476,7 @@ async function handleToolCall(id, params) {
           id,
           await syncPlanFromText({
             text: args.text,
+            transcriptPath: args.transcript_path || null,
             sessionId: args.session_id || "hook",
             turnId: args.turn_id || null,
           }),
