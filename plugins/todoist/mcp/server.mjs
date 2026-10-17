@@ -16,9 +16,9 @@ import {
 } from "./lib/planner.mjs";
 import { readConfig } from "./lib/store.mjs";
 
-const SERVER_NAME = "todoist-planner";
-const SERVER_VERSION = "0.4.5";
-const BOARD_URI = "ui://todoist-planner/board.html";
+const SERVER_NAME = "todoist";
+const SERVER_VERSION = "0.5.0";
+const BOARD_URI = "ui://todoist/board.html";
 const BOARD_ICON = {
   src: "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IiMzMzljZmYiIHN0cm9rZS13aWR0aD0iMiIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIj48cGF0aCBkPSJNOSAxMWwzIDMgOC04Ii8+PHBhdGggZD0iTTIwIDEydjZhMiAyIDAgMCAxLTIgMkg2YTIgMiAwIDAgMS0yLTJWNmEyIDIgMCAwIDEgMi0yaDkiLz48L3N2Zz4=",
   mimeType: "image/svg+xml",
@@ -69,7 +69,7 @@ const BOARD_TOOL_META = {
       {
         type: "global",
         quickAction: {
-          title: "打开任务清单",
+          title: "打开 Todoist",
           icons: [BOARD_ICON],
           target: { type: "tool", name: "todoist_open_board", arguments: {} },
         },
@@ -82,7 +82,7 @@ const BOARD_TOOL_META = {
 const TOOLS = [
   {
     name: "todoist_open_board",
-    title: "打开任务清单",
+    title: "Todoist",
     description:
       "在 Codex 侧边栏或对话侧栏打开任务清单面板，可查看哪些任务已完成、哪些还没做。",
     icons: [BOARD_ICON],
@@ -391,7 +391,7 @@ async function handleToolCall(id, params) {
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    process.stderr.write(`[todoist-planner] tool ${name} failed: ${message}\n`);
+    process.stderr.write(`[todoist] tool ${name} failed: ${message}\n`);
     return toolResult(id, { ok: false, error: message }, { isError: true });
   }
 }
@@ -405,7 +405,7 @@ async function handleRequest(message) {
       capabilities: { tools: {}, resources: {} },
       serverInfo: { name: SERVER_NAME, version: SERVER_VERSION, icons: [BOARD_ICON] },
       instructions:
-        "Todoist 任务清单插件。用 todoist_sync_plan 把计划步骤同步到 Todoist；用 todoist_open_board 打开侧边栏面板。不要重复创建同名计划任务。",
+        "Todoist 插件。用 todoist_sync_plan 把计划步骤同步到 Todoist；用 todoist_open_board 打开侧边栏面板。不要重复创建同名计划任务。",
     });
     return;
   }
@@ -430,7 +430,7 @@ async function handleRequest(message) {
       resources: [
         {
           uri: BOARD_URI,
-          name: "Todoist 任务清单面板",
+          name: "Todoist 面板",
           description: "查看任务完成情况、添加任务、勾选完成。",
           mimeType: "text/html;profile=mcp-app",
           _meta: {
@@ -497,13 +497,13 @@ lines.on("line", (line) => {
   try {
     message = JSON.parse(line.replace(/^\uFEFF/, ""));
   } catch (error) {
-    process.stderr.write(`[todoist-planner] 忽略无效 JSON-RPC 行：${error instanceof Error ? error.message : String(error)}\n`);
+    process.stderr.write(`[todoist] 忽略无效 JSON-RPC 行：${error instanceof Error ? error.message : String(error)}\n`);
     return;
   }
   if (message.method === undefined && message.id !== undefined) return;
   requestQueue = requestQueue.then(() => handleRequest(message)).catch((error) => {
     const text = error instanceof Error ? error.message : String(error);
-    process.stderr.write(`[todoist-planner] request failed: ${text}\n`);
+    process.stderr.write(`[todoist] request failed: ${text}\n`);
     if (message.id !== undefined) {
       sendError(message.id, JsonRpcError.INTERNAL_ERROR, text);
     }

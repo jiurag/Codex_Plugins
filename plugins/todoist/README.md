@@ -1,10 +1,10 @@
-# Todoist 任务清单（Codex 插件）
+# Todoist（Codex 插件）
 
 把 Codex 的 `/plan` 计划步骤同步成 Todoist 任务，并在 Codex 侧边栏用面板查看“哪些做了、哪些没做”。
 
 ## 两种模式
 
-- **本地模式（默认）**：不需要登录、不需要 Token、不需要网络。任务、项目、标签都存在 `C:\Users\jiura\.codex\todoist-planner\state.json`。
+- **本地模式（默认）**：不需要登录、不需要 Token、不需要网络。任务、项目、标签都存在 `C:\Users\jiura\.codex\todoist\state.json`。
 - **Todoist 同步（可选）**：在 `config.json` 里配置 API Token 后，读写你的 Todoist 账号。不是登录流程。
 
 ## 能力
@@ -22,18 +22,18 @@
 ## 从 jiura-plugins 安装（推荐）
 
 ```bash
-codex plugin add todoist-planner@jiura-plugins
+codex plugin add todoist@jiura-plugins
 ```
 
 ## 本地开发安装（personal marketplace）
 
-1. 把 `todoist-planner` 文件夹放到 `C:\Users\jiura\plugins\todoist-planner`。
+1. 把 `todoist` 文件夹放到 `C:\Users\jiura\plugins\todoist`。
 2. 在 `C:\Users\jiura\.agents\plugins\marketplace.json` 的 `plugins` 数组里加：
 
 ```json
 {
-  "name": "todoist-planner",
-  "source": { "source": "local", "path": "./plugins/todoist-planner" },
+  "name": "todoist",
+  "source": { "source": "local", "path": "./plugins/todoist" },
   "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
   "category": "效率工具"
 }
@@ -48,10 +48,10 @@ codex plugin add todoist-planner@jiura-plugins
 2. 在终端运行（输入不会回显，也不会进聊天记录）：
 
 ```powershell
-node C:\Users\jiura\plugins\todoist-planner\scripts\set-token.mjs
+node C:\Users\jiura\plugins\todoist\scripts\set-token.mjs
 ```
 
-也可以手动新建 `C:\Users\jiura\.codex\todoist-planner\config.json`：
+也可以手动新建 `C:\Users\jiura\.codex\todoist\config.json`：
 
 ```json
 {

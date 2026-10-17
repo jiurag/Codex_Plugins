@@ -2,10 +2,30 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-const DEFAULT_DATA_DIR = path.join(os.homedir(), ".codex", "todoist-planner");
+const DEFAULT_DATA_DIR = path.join(os.homedir(), ".codex", "todoist");
+const LEGACY_DATA_DIR = path.join(os.homedir(), ".codex", "todoist-planner");
+
+function migrateLegacyData() {
+  try {
+    if (fs.existsSync(DEFAULT_DATA_DIR)) return;
+    if (!fs.existsSync(LEGACY_DATA_DIR)) return;
+    fs.mkdirSync(DEFAULT_DATA_DIR, { recursive: true });
+    for (const name of ["state.json", "config.json"]) {
+      const source = path.join(LEGACY_DATA_DIR, name);
+      if (fs.existsSync(source)) {
+        fs.copyFileSync(source, path.join(DEFAULT_DATA_DIR, name));
+      }
+    }
+  } catch {
+    // Migration is best effort; fall back to a fresh data directory.
+  }
+}
 
 export function dataDir() {
-  return process.env.TODOIST_PLANNER_HOME || DEFAULT_DATA_DIR;
+  const override = process.env.TODOIST_PLANNER_HOME || process.env.TODOIST_HOME;
+  if (override) return override;
+  migrateLegacyData();
+  return DEFAULT_DATA_DIR;
 }
 
 export function ensureDataDir() {

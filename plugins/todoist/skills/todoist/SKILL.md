@@ -1,9 +1,9 @@
 ---
-name: todoist-planner
+name: todoist
 description: 把 Codex 的计划步骤同步成 Todoist 任务，并在侧边栏任务清单里查看完成情况。用户提到待办、任务清单、Todoist、/plan 同步、哪些做完了时使用。
 ---
 
-# Todoist 任务清单
+# Todoist
 
 这个技能负责三件事：把计划变成待办、查看完成进度、维护 Todoist 项目。
 
@@ -47,15 +47,15 @@ description: 把 Codex 的计划步骤同步成 Todoist 任务，并在侧边栏
 
 ## 本地模式
 
-默认不需要登录、不需要 Token、不需要网络。任务、项目、标签都存在本机 `~/.codex/todoist-planner/state.json`。可以直接使用 `todoist_create_project`、`todoist_set_project`、`todoist_add_task`、`todoist_update_task`、`todoist_reorder_tasks` 等工具。
+默认不需要登录、不需要 Token、不需要网络。任务、项目、标签都存在本机 `~/.codex/todoist/state.json`。可以直接使用 `todoist_create_project`、`todoist_set_project`、`todoist_add_task`、`todoist_update_task`、`todoist_reorder_tasks` 等工具。
 
 ## 配置 Token（可选）
 
 只有想同步到 Todoist 账号时才需要配置。没有 Token 时完全走本地模式，不会碰真实账号。配置方法：
 
 1. 打开 Todoist → 设置 → 集成 → 开发者 → API token，复制 Token。
-2. 在终端运行 `node C:\Users\jiura\plugins\todoist-planner\scripts\set-token.mjs`，粘贴 Token（不回显）。
-3. 或者手动新建 `~/.codex/todoist-planner/config.json`：
+2. 在终端运行 `node C:\Users\jiura\plugins\todoist\scripts\set-token.mjs`，粘贴 Token（不回显）。
+3. 或者手动新建 `~/.codex/todoist/config.json`：
 
 ```json
 {

@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "todoist-planner": {
+    "todoist": {
       "command": "node",
       "args": ["./mcp/server.mjs"],
       "cwd": ".",

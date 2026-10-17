@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>任务清单</title>
+<title>Todoist</title>
 <style>
   :root {
     color-scheme: light dark;
@@ -396,7 +396,7 @@
 <div class="app">
   <header class="header">
     <div class="title-row">
-      <h1>任务清单</h1>
+      <h1>Todoist</h1>
       <div class="header-actions">
         <span id="modePill" class="conn"><i></i><span id="modeText">连接中</span></span>
         <button id="refreshBtn" class="icon-btn" type="button" title="刷新" aria-label="刷新">
@@ -566,7 +566,7 @@
       if (window.parent === window) throw new Error("not-embedded");
       const params = {
         appCapabilities: { availableDisplayModes: ["inline", "fullscreen"] },
-        appInfo: { name: "Todoist 任务清单", version: "0.3.0" },
+        appInfo: { name: "Todoist", version: "0.5.0" },
         protocolVersion: "2026-01-26",
       };
       let result;

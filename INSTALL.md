@@ -6,7 +6,7 @@
 | --- | --- |
 | `ssh-manager` | SSH 服务器与部署管理 |
 | `image-shrink` | 图片体积守卫：压缩截图，避免请求体超 48 MiB 报 413 |
-| `todoist-planner` | 任务清单：本地待办 + 可选 Todoist 同步 |
+| `todoist` | 任务清单：本地待办 + 可选 Todoist 同步 |
 
 下面的安装步骤对两个插件都适用，把插件名换掉即可。
 
@@ -25,7 +25,7 @@ codex plugin marketplace add jiurag/Codex_Plugins
 ```bash
 codex plugin add ssh-manager@jiura-plugins
 codex plugin add image-shrink@jiura-plugins
-codex plugin add todoist-planner@jiura-plugins
+codex plugin add todoist@jiura-plugins
 ```
 
 ### 3. 确认安装
@@ -50,7 +50,7 @@ codex plugin list
 codex plugin marketplace add "D:\路径\Codex_Plugins"
 codex plugin add ssh-manager@jiura-plugins
 codex plugin add image-shrink@jiura-plugins
-codex plugin add todoist-planner@jiura-plugins
+codex plugin add todoist@jiura-plugins
 ```
 
 要点：

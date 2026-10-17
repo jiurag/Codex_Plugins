@@ -2,8 +2,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-const configDir = path.join(os.homedir(), ".codex", "todoist-planner");
+const configDir = path.join(os.homedir(), ".codex", "todoist");
 const configPath = path.join(configDir, "config.json");
+const legacyConfigPath = path.join(os.homedir(), ".codex", "todoist-planner", "config.json");
 
 function finish(token) {
   const value = String(token || "").trim();
@@ -13,7 +14,9 @@ function finish(token) {
   }
   fs.mkdirSync(configDir, { recursive: true });
   let config = {};
-  try { config = JSON.parse(fs.readFileSync(configPath, "utf8").replace(/^\uFEFF/, "")); } catch {}
+  try { config = JSON.parse(fs.readFileSync(configPath, "utf8").replace(/^\uFEFF/, "")); } catch {
+    try { config = JSON.parse(fs.readFileSync(legacyConfigPath, "utf8").replace(/^\uFEFF/, "")); } catch {}
+  }
   config.token = value;
   config.projectName = config.projectName || "Codex 任务";
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2), "utf8");

@@ -73,7 +73,7 @@ const init = await rpc("initialize", {
   capabilities: {},
   clientInfo: { name: "smoke", version: "1.0.0" },
 });
-assert.equal(init.serverInfo.name, "todoist-planner");
+assert.equal(init.serverInfo.name, "todoist");
 assert.ok(Array.isArray(init.serverInfo.icons) && init.serverInfo.icons.length > 0, "serverInfo icons missing");
 console.log("PASS initialize");
 
@@ -85,7 +85,7 @@ for (const name of ["todoist_open_board", "todoist_board_data", "todoist_add_tas
   assert.ok(names.includes(name), "missing tool " + name);
 }
 const openBoard = tools.tools.find((item) => item.name === "todoist_open_board");
-assert.equal(openBoard._meta.ui.resourceUri, "ui://todoist-planner/board.html");
+assert.equal(openBoard._meta.ui.resourceUri, "ui://todoist/board.html");
 assert.ok(Array.isArray(openBoard.icons) && openBoard.icons.length > 0, "tool icons missing");
 const globalEntry = openBoard._meta["openai/ui"].entrypoints.find((item) => item.type === "global");
 assert.ok(globalEntry);
@@ -96,7 +96,7 @@ console.log("PASS tools/list");
 const resources = await rpc("resources/list", {});
 assert.equal(resources.resources.length, 1);
 assert.equal(resources.resources[0].mimeType, "text/html;profile=mcp-app");
-const read = await rpc("resources/read", { uri: "ui://todoist-planner/board.html" });
+const read = await rpc("resources/read", { uri: "ui://todoist/board.html" });
 const html = read.contents[0].text;
 assert.ok(html.length > 10000, "board html too small");
 assert.ok(html.includes("ui/initialize"));

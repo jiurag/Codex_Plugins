@@ -29,10 +29,10 @@
       "category": "实用工具"
     },
     {
-      "name": "todoist-planner",
+      "name": "todoist",
       "source": {
         "source": "local",
-        "path": "./plugins/todoist-planner"
+        "path": "./plugins/todoist"
       },
       "policy": {
         "installation": "AVAILABLE",
