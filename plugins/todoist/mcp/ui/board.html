@@ -291,37 +291,122 @@
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; scroll-behavior: auto !important; }
   }
+
+  .top-rail { display: flex; align-items: center; gap: 16px; padding: 2px 4px 0; }
+  .brand-lockup { display: flex; align-items: center; gap: 12px; min-width: 0; }
+  .project-switcher { display: flex; align-items: center; gap: 7px; margin-left: auto; position: relative; min-width: 230px; }
+  .project-switcher .project-select { flex: 1; min-width: 0; height: 40px; padding: 0 34px 0 12px; border: 1px solid var(--line); border-radius: 13px; outline: 0; background: rgba(127,127,127,.04); color: var(--ink); font-size: 12px; -webkit-appearance: none; appearance: none; background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%); background-position: calc(100% - 16px) 17px, calc(100% - 11px) 17px; background-size: 5px 5px, 5px 5px; background-repeat: no-repeat; }
+  .project-switcher .project-select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .project-switcher .icon-button { width: 40px; height: 40px; }
+  .mode-pill { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: 10.5px; white-space: nowrap; }
+  .mode-pill i { width: 5px; height: 5px; border-radius: 50%; background: #f2ad4b; }
+  .mode-pill.live i { background: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); animation: breath 2.4s ease-in-out infinite; }
+  .hero-cloud { position: relative; min-height: 196px; margin-top: 18px; overflow: hidden; display: grid; grid-template-columns: minmax(0,1fr) 230px; align-items: center; gap: 30px; padding: 30px 34px; border: 1px solid rgba(255,255,255,.15); border-radius: 34px; color: #fff; background: rgba(8,10,14,.88); box-shadow: 0 28px 80px rgba(0,0,0,.26), inset 0 1px 0 rgba(255,255,255,.22), inset 1px 0 0 rgba(255,255,255,.09); -webkit-backdrop-filter: blur(38px) saturate(1.3); backdrop-filter: blur(38px) saturate(1.3); transition: min-height .55s var(--spring), padding .55s var(--spring), border-radius .55s var(--spring), grid-template-columns .55s var(--spring); }
+  .hero-cloud::before { content: ""; position: absolute; width: 460px; height: 340px; right: -120px; top: -180px; border-radius: 50%; background: radial-gradient(circle, var(--accent-soft), transparent 68%); pointer-events: none; }
+  .hero-cloud::after { content: ""; position: absolute; left: 34px; right: 34px; bottom: 0; height: 1px; background: linear-gradient(90deg, transparent, var(--accent), transparent); opacity: .55; }
+  .hero-main { position: relative; z-index: 1; min-width: 0; }
+  .hero-kicker { display: block; color: hsl(var(--hue) 95% 76%); font-size: 10px; font-weight: 650; letter-spacing: .22em; text-transform: uppercase; }
+  .hero-main h1 { margin: 9px 0 5px; max-width: 740px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: clamp(32px, 4.2vw, 46px); line-height: 1.08; letter-spacing: -.065em; font-weight: 500; }
+  .hero-main p { margin: 0; color: rgba(255,255,255,.62); font-size: 12px; }
+  .hero-progress { position: relative; z-index: 1; padding: 17px; border: 1px solid rgba(255,255,255,.12); border-radius: 20px; background: rgba(255,255,255,.07); }
+  .hero-progress-head, .hero-progress-foot { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; color: rgba(255,255,255,.58); font-size: 10px; }
+  .hero-progress-head b { color: #fff; font-size: 28px; letter-spacing: -.05em; font-weight: 500; }
+  .hero-track { height: 7px; margin: 13px 0 11px; overflow: hidden; border-radius: 999px; background: rgba(255,255,255,.14); }
+  .hero-track i { display: block; width: 0%; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--accent), hsl(var(--hue) 95% 76%)); box-shadow: 0 0 18px var(--accent-soft); transition: width .85s var(--spring); }
+  .hero-collapse { position: absolute; top: 14px; right: 15px; z-index: 2; width: 30px; height: 30px; display: grid; place-items: center; border-radius: 10px; color: rgba(255,255,255,.72); background: rgba(255,255,255,.09); transition: background .2s, transform .4s var(--spring); }
+  .hero-collapse:hover { background: rgba(255,255,255,.16); }
+  .hero-collapse:active { transform: scale(.88); }
+  .hero-collapse svg { width: 15px; height: 15px; transition: transform .4s var(--spring); }
+  .hero-cloud.compact { min-height: 58px; padding: 0 26px; grid-template-columns: minmax(0,1fr) auto; border-radius: 999px; }
+  .hero-cloud.compact .hero-kicker, .hero-cloud.compact .hero-main p, .hero-cloud.compact .hero-progress { display: none; }
+  .hero-cloud.compact .hero-main h1 { margin: 0; font-size: 18px; letter-spacing: -.03em; }
+  .hero-cloud.compact .hero-collapse svg { transform: rotate(180deg); }
+  .stage { display: grid; grid-template-columns: 176px minmax(0,1fr); gap: 24px; margin-top: 22px; align-items: start; }
+  .session-rail { position: sticky; top: 18px; padding: 5px 0; min-width: 0; }
+  .rail-label { display: block; padding-left: 4px; color: var(--faint); font-size: 10px; font-weight: 650; letter-spacing: .18em; text-transform: uppercase; }
+  .session-list { position: relative; display: flex; flex-direction: column; gap: 10px; margin-top: 14px; padding: 2px 0 2px 24px; }
+  .session-list::before { content: ""; position: absolute; left: 8px; top: 9px; bottom: 9px; width: 1px; background: var(--line); }
+  .session-button { position: relative; width: 100%; min-height: 46px; display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 15px; color: var(--muted); text-align: left; transition: background .26s ease, color .26s ease, transform .4s var(--spring); }
+  .session-button::before { content: ""; position: absolute; left: -21px; top: 50%; width: 7px; height: 7px; border-radius: 50%; background: var(--faint); transform: translateY(-50%); transition: background .25s, box-shadow .25s, transform .4s var(--spring); }
+  .session-button:hover { background: rgba(127,127,127,.1); color: var(--ink); }
+  .session-button:active { transform: scale(.97); }
+  .session-button.active { color: var(--ink); background: var(--card); box-shadow: var(--shadow-card); }
+  .session-button.active::before { background: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); transform: translateY(-50%) scale(1.15); }
+  .session-orb { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+  .session-name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+  .session-count { color: var(--faint); font-size: 10px; font-variant-numeric: tabular-nums; }
+  .focus-canvas { min-width: 0; padding-bottom: 104px; }
+  .focus-canvas .content { gap: 26px; }
+  .focus-canvas .card-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .focus-canvas .card-grid .task-card:first-child { grid-column: span 2; min-height: 208px; }
+  .command-dock { position: sticky; z-index: 15; bottom: 16px; display: grid; grid-template-columns: minmax(150px, .65fr) minmax(210px, 1fr) auto; gap: 8px; align-items: center; margin-top: 18px; padding: 10px; border-radius: 22px; background: var(--glass-strong); border: 1px solid var(--line); box-shadow: var(--shadow), inset 0 1px 0 var(--rim); -webkit-backdrop-filter: blur(38px) saturate(1.3); backdrop-filter: blur(38px) saturate(1.3); }
+  .command-dock .search-row { height: 40px; }
+  .command-dock .quick-add { min-height: 40px; }
+  .command-dock .secondary-button { height: 40px; }
+  .command-dock .hint { grid-column: 1 / -1; padding: 0 4px 2px; }
+  @media (max-width: 820px) {
+    .top-rail { flex-wrap: wrap; }
+    .project-switcher { order: 3; width: 100%; margin-left: 0; }
+    .top-actions { margin-left: auto; }
+    .hero-cloud { grid-template-columns: 1fr; min-height: 0; padding: 26px 24px; gap: 20px; }
+    .hero-progress { max-width: 280px; }
+    .hero-main h1 { font-size: 34px; }
+    .stage { grid-template-columns: 1fr; gap: 18px; }
+    .session-rail { position: static; }
+    .session-list { display: flex; overflow-x: auto; gap: 8px; padding: 8px 0 4px; }
+    .session-list::before { display: none; }
+    .session-button { width: auto; min-width: max-content; min-height: 40px; }
+    .session-button::before { display: none; }
+    .session-name { max-width: 190px; }
+    .focus-canvas .card-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
+    .focus-canvas .card-grid .task-card:first-child { grid-column: span 2; }
+    .command-dock { grid-template-columns: 1fr 1fr; }
+    .command-dock .search-row, .command-dock .quick-add { min-width: 0; }
+    .command-dock .secondary-button { width: 100%; }
+    .command-dock .hint { grid-column: 1 / -1; }
+  }
+  @media (max-width: 560px) {
+    .app { padding: 14px 16px 22px; }
+    .brand-copy h1 { font-size: 22px; }
+    .hero-main h1 { font-size: 29px; }
+    .hero-progress { max-width: none; }
+    .focus-canvas .card-grid { grid-template-columns: 1fr; }
+    .focus-canvas .card-grid .task-card:first-child { grid-column: span 1; min-height: 0; }
+    .command-dock { grid-template-columns: 1fr; }
+    .command-dock .hint { grid-column: 1; }
+  }
 </style>
 </head>
 <body>
   <div class="app">
-    <header class="brandbar glass">
-      <span class="brand-mark" aria-hidden="true">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 7.5h9"/><path d="M4.5 12h14.5"/><path d="M4.5 16.5h7"/><path d="M17.5 7.5v6"/></svg>
-      </span>
-      <div class="brand-copy"><h1>Todoist</h1><p>Natural liquid light</p></div>
-      <button id="cloudToggle" class="fluid-cloud" type="button" aria-expanded="true" title="展开或收起概览">
-        <span class="cloud-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 8.5h14"/><path d="M5 12h9"/><path d="M5 15.5h11"/></svg></span>
-        <span class="cloud-copy"><b id="cloudTitle">任务</b><small id="cloudSummary">正在读取…</small></span>
-        <span class="cloud-mode" id="modePill"><i></i><span id="modeText">连接中</span></span>
-        <span class="cloud-progress"><span class="pct"><span>完成度</span><b id="percentText">0%</b></span><span class="cloud-track"><i id="barFill"></i></span></span>
-      </button>
-      <div class="top-actions"><button id="refreshBtn" class="icon-button" type="button" title="刷新" aria-label="刷新"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-.6 3"/><path d="M20 4v7h-7"/></svg></button></div>
+    <header class="top-rail">
+      <div class="brand-lockup">
+        <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 7.5h9"/><path d="M4.5 12h14.5"/><path d="M4.5 16.5h7"/><path d="M17.5 7.5v6"/></svg></span>
+        <div class="brand-copy"><h1>Todoist</h1><p>Natural liquid light</p></div>
+      </div>
+      <div class="project-switcher">
+        <select id="projectSelect" class="project-select" aria-label="项目"></select>
+        <button id="newProjectBtn" class="icon-button" type="button" title="新建项目" aria-label="新建项目">+</button>
+        <div id="projectPopover" class="popover hidden"><input id="projectName" placeholder="项目名称" maxlength="80" autocomplete="off" /><button id="projectCreate" type="button">创建</button></div>
+      </div>
+      <div class="top-actions"><span id="modePill" class="mode-pill"><i></i><span id="modeText">连接中</span></span><button id="refreshBtn" class="icon-button" type="button" title="刷新" aria-label="刷新"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-.6 3"/><path d="M20 4v7h-7"/></svg></button></div>
     </header>
-    <div class="workspace">
-      <aside class="session-panel glass">
-        <span class="panel-label">会话分类</span>
-        <div id="sessionList" class="session-list" aria-label="会话分类"></div>
-      </aside>
-      <main class="main-panel">
-        <section class="control-bar glass">
-          <div class="project-row"><select id="projectSelect" class="project-select" aria-label="项目"></select><button id="newProjectBtn" class="icon-button" type="button" title="新建项目" aria-label="新建项目">+</button><div id="projectPopover" class="popover hidden"><input id="projectName" placeholder="项目名称" maxlength="80" autocomplete="off" /><button id="projectCreate" type="button">创建</button></div></div>
-          <div class="search-row"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input id="searchInput" type="text" placeholder="搜索任务或标签…" autocomplete="off" maxlength="120" /></div>
-          <div class="quick-row"><div class="quick-add"><input id="newTask" type="text" placeholder="添加一个任务…" autocomplete="off" maxlength="500" /><button id="addBtn" class="primary-add" type="button" aria-label="添加任务"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button></div><button id="syncPlanBtn" class="secondary-button" type="button" disabled>同步最近计划</button></div>
-          <div id="lastPlanHint" class="hint">在对话里说「同步计划到 Todoist」</div>
-        </section>
+    <section id="heroCloud" class="hero-cloud">
+      <div class="hero-main"><span class="hero-kicker">SESSION STREAM</span><h1 id="cloudTitle">全部会话</h1><p id="cloudSummary">正在读取…</p></div>
+      <div class="hero-progress"><div class="hero-progress-head"><span>完成度</span><b id="percentText">0%</b></div><div class="hero-track"><i id="barFill"></i></div><div class="hero-progress-foot"><span>已完成</span><span>当前视图</span></div></div>
+      <button id="cloudToggle" class="hero-collapse" type="button" aria-expanded="true" aria-label="收起概览"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m6 14 6-6 6 6"/></svg></button>
+    </section>
+    <div class="stage">
+      <aside class="session-rail"><span class="rail-label">会话轨道</span><div id="sessionList" class="session-list" aria-label="会话分类"></div></aside>
+      <main class="focus-canvas">
         <div id="banner"></div>
         <section id="content" class="content"><div class="empty"><div class="empty-inner"><h3>正在读取</h3><p>稍等一下…</p></div></div></section>
+        <section class="command-dock glass">
+          <div class="search-row"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input id="searchInput" type="text" placeholder="搜索任务或标签…" autocomplete="off" maxlength="120" /></div>
+          <div class="quick-add"><input id="newTask" type="text" placeholder="添加一个任务…" autocomplete="off" maxlength="500" /><button id="addBtn" class="primary-add" type="button" aria-label="添加任务"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button></div>
+          <button id="syncPlanBtn" class="secondary-button" type="button" disabled>同步最近计划</button>
+          <div id="lastPlanHint" class="hint">在对话里说「同步计划到 Todoist」</div>
+        </section>
       </main>
     </div>
     <div class="footnote">数据来自 Todoist · 由 Codex 提供</div>
@@ -378,7 +463,7 @@
     function notify(method, params) { window.parent.postMessage({ jsonrpc: "2.0", method, params }, "*"); }
     async function connect() {
       if (window.parent === window) throw new Error("not-embedded");
-      const params = { appCapabilities: { availableDisplayModes: ["inline", "fullscreen"] }, appInfo: { name: "Todoist", version: "0.6.9" }, protocolVersion: "2026-01-26" };
+      const params = { appCapabilities: { availableDisplayModes: ["inline", "fullscreen"] }, appInfo: { name: "Todoist", version: "0.7.0" }, protocolVersion: "2026-01-26" };
       let result;
       try { result = await request("ui/initialize", params, 4000); } catch { result = await request("ui/initialize", params, 4000); }
       notify("ui/notifications/initialized", {});
@@ -453,7 +538,6 @@
       projects.forEach((project) => { const option = document.createElement("option"); option.value = project.id; option.textContent = project.isInbox ? project.name + "（收件箱）" : project.name; if (String(project.id) === String(data.activeProjectId)) option.selected = true; select.appendChild(option); });
     }
     const current = projects.find((project) => String(project.id) === String(data.activeProjectId));
-    $("cloudTitle").textContent = current ? current.name : "任务";
   }
   function renderPlanHint(data) {
     const last = data.lastPlan;
@@ -463,7 +547,14 @@
       $("lastPlanHint").textContent = `最近计划 ${last.steps.length} 步` + session + time;
       $("syncPlanBtn").disabled = false;
     } else { $("lastPlanHint").textContent = "在对话里说「同步计划到 Todoist」"; $("syncPlanBtn").disabled = true; }
-  }  function filterTasks(tasks) {
+  }
+  function updateHero(data, visible) {
+    const key = state.sessionFilter;
+    $("cloudTitle").textContent = key === "all" ? "全部会话" : sessionLabel(key === "unassigned" ? null : key, data);
+    const done = visible.filter((task) => task.checked).length;
+    $("cloudSummary").textContent = String(visible.length) + " 项任务 · " + String(done) + " 项已完成";
+  }
+  function filterTasks(tasks) {
     const query = state.query.trim().toLowerCase();
     if (!query) return tasks;
     return tasks.filter((task) => (task.content + " " + (task.labels || []).join(" ")).toLowerCase().includes(query));
@@ -572,6 +663,7 @@
     setAmbient(data); setMode(data.config && data.config.mode ? data.config.mode : "local"); renderBanner(); renderProjects(data);
     renderStats(data.stats || { total: 0, completed: 0, active: 0, percent: 0 }); renderPlanHint(data);
     const visible = filterTasks(Array.isArray(data.tasks) ? data.tasks : []);
+    updateHero(data, visible);
     renderSessionList(data, visible); renderSections(data, visible, Boolean(animate || state.firstRender)); state.firstRender = false;
   }
   async function load(animate = false) {
@@ -672,8 +764,8 @@
   $("refreshBtn").addEventListener("click", () => load(true));
   $("addBtn").addEventListener("click", addTask);
   $("newTask").addEventListener("keydown", (event) => { if (event.key === "Enter") addTask(); });
-  $("searchInput").addEventListener("input", (event) => { state.query = event.target.value; if (state.data) { const visible = filterTasks(state.data.tasks || []); renderSessionList(state.data, visible); renderSections(state.data, visible, false); } });
-  $("sessionList").addEventListener("click", (event) => { const button = event.target.closest("[data-session]"); if (!button) return; state.sessionFilter = button.dataset.session; if (state.data) { const visible = filterTasks(state.data.tasks || []); renderSessionList(state.data, visible); renderSections(state.data, visible, false); } });
+  $("searchInput").addEventListener("input", (event) => { state.query = event.target.value; if (state.data) { const visible = filterTasks(state.data.tasks || []); updateHero(state.data, visible); renderSessionList(state.data, visible); renderSections(state.data, visible, false); } });
+  $("sessionList").addEventListener("click", (event) => { const button = event.target.closest("[data-session]"); if (!button) return; state.sessionFilter = button.dataset.session; if (state.data) { const visible = filterTasks(state.data.tasks || []); updateHero(state.data, visible); renderSessionList(state.data, visible); renderSections(state.data, visible, false); } });
   $("syncPlanBtn").addEventListener("click", syncPlan);
   document.querySelectorAll("#priorityGroup button").forEach((button) => button.addEventListener("click", () => setPriority(Number(button.dataset.priority))));
   $("modalBackdrop").addEventListener("click", closeEditor);
@@ -687,7 +779,7 @@
   const newProjectBtn = $("newProjectBtn"); if (newProjectBtn) newProjectBtn.addEventListener("click", () => { $("projectPopover")?.classList.toggle("hidden"); if (!$("projectPopover")?.classList.contains("hidden")) setTimeout(() => $("projectName")?.focus(), 40); });
   const projectCreate = $("projectCreate"); if (projectCreate) projectCreate.addEventListener("click", createProject);
   const projectName = $("projectName"); if (projectName) projectName.addEventListener("keydown", (event) => { if (event.key === "Enter") createProject(); });
-  $("cloudToggle").addEventListener("click", () => { state.cloudCompact = !state.cloudCompact; $("cloudToggle").classList.toggle("compact", state.cloudCompact); $("cloudToggle").setAttribute("aria-expanded", String(!state.cloudCompact)); });
+  $("cloudToggle").addEventListener("click", () => { state.cloudCompact = !state.cloudCompact; $("heroCloud").classList.toggle("compact", state.cloudCompact); $("cloudToggle").setAttribute("aria-expanded", String(!state.cloudCompact)); });
   window.addEventListener("pointermove", (event) => { document.documentElement.style.setProperty("--mx", event.clientX + "px"); document.documentElement.style.setProperty("--my", event.clientY + "px"); }, { passive: true });
   boot();
 })();
