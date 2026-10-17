@@ -514,7 +514,7 @@
 
   const LIVE_CONFIG = { port: Number("__SSE_PORT__"), token: "__SSE_TOKEN__" };
   const $ = (id) => document.getElementById(id);
-  const state = { data: null, connected: false, demo: false, busy: false, timer: null, firstRender: true, filter: "all", query: "", mode: null, live: false, liveSource: null };
+  const state = { data: null, connected: false, demo: false, busy: false, timer: null, firstRender: true, filter: "all", query: "", mode: null, live: false, liveSource: null, revision: null, revisionTimer: null };
 
   const previewTheme = new URLSearchParams(window.location.search).get("theme");
   if (previewTheme === "dark" || previewTheme === "light") {
@@ -567,7 +567,7 @@
       if (window.parent === window) throw new Error("not-embedded");
       const params = {
         appCapabilities: { availableDisplayModes: ["inline", "fullscreen"] },
-        appInfo: { name: "Todoist", version: "0.6.1" },
+        appInfo: { name: "Todoist", version: "0.6.2" },
         protocolVersion: "2026-01-26",
       };
       let result;
@@ -621,7 +621,7 @@
   function updateModeLabel() {
     const text = $("modeText");
     const base = state.mode === "todoist" ? "Todoist" : state.mode === "local" ? "本地" : "连接中";
-    text.textContent = base + (state.live ? " · 实时" : "");
+    text.textContent = base + (state.live ? " · 实时" : state.connected ? " · 自动" : "");
   }
 
   function setMode(mode) {
@@ -938,6 +938,7 @@
 
   function render(data, animate) {
     state.data = data;
+    state.revision = Number(data.revision) || 0;
     state.demo = Boolean(data.demo);
     setMode(data.config && data.config.mode ? data.config.mode : "local");
     renderBanner();
@@ -989,6 +990,19 @@
     } finally {
       state.busy = false;
       $("refreshBtn").classList.remove("spin");
+    }
+  }
+
+  async function checkRevision() {
+    if (!state.connected || state.busy) return;
+    try {
+      const result = await callTool("todoist_board_version", {});
+      const data = unwrap(result);
+      if (data && typeof data.version === "number" && data.version !== state.revision) {
+        await load(true);
+      }
+    } catch {
+      // Version polling is an optimization; keep the normal poll as fallback.
     }
   }
 
@@ -1313,6 +1327,9 @@
     state.timer = setInterval(() => {
       if (!document.hidden && state.connected) load(true);
     }, 30000);
+    state.revisionTimer = setInterval(() => {
+      if (!document.hidden) checkRevision();
+    }, 1500);
   }
 
   async function createProjectFromPopover() {

@@ -10,6 +10,10 @@ export function planKey(sessionId, step) {
     .slice(0, 16);
 }
 
+function markChanged(state) {
+  state.revision = (Number(state.revision) || 0) + 1;
+}
+
 function normalizeStatus(value) {
   const status = String(value || "pending").toLowerCase();
   if (/complete|done|finish/.test(status)) return "completed";
@@ -141,6 +145,7 @@ function localBoardData(state) {
       tokenConfigured: false,
       connected: false,
     },
+    revision: Number(state.revision) || 0,
     lastPlan: state.lastPlan || null,
     lastPlans: state.lastPlans || {},
     updatedAt: new Date().toISOString(),
@@ -185,6 +190,7 @@ function localAddTask(state, content, options) {
     due: options.dueDate,
     priority: options.priority,
   });
+  markChanged(state);
   writeState(state);
   return { ok: true, id: task.id, mode: "local", projectId: project.id };
 }
@@ -213,6 +219,7 @@ function localUpdateTask(state, taskId, patch) {
     state.planMap[task.planKey].content = task.content;
     state.planMap[task.planKey].updatedAt = Date.now();
   }
+  markChanged(state);
   writeState(state);
   return { ok: true, mode: "local" };
 }
@@ -225,6 +232,7 @@ function localDeleteTask(state, taskId) {
   for (const [key, entry] of Object.entries(state.planMap || {})) {
     if (String(entry.taskId) === String(taskId)) delete state.planMap[key];
   }
+  markChanged(state);
   writeState(state);
   return { ok: true, mode: "local" };
 }
@@ -237,6 +245,7 @@ function localSetDone(state, taskId, done) {
   for (const entry of Object.values(state.planMap || {})) {
     if (String(entry.taskId) === String(taskId)) entry.done = Boolean(done);
   }
+  markChanged(state);
   writeState(state);
   return { ok: true, mode: "local" };
 }
@@ -248,6 +257,7 @@ function localReorder(state, taskIds) {
     const task = (state.localTasks || []).find((item) => String(item.id) === id);
     if (task) task.order = index + 1;
   });
+  markChanged(state);
   writeState(state);
   return { ok: true, mode: "local" };
 }
@@ -264,6 +274,7 @@ function localCreateProject(state, name) {
   state.projects = Array.isArray(state.projects) ? state.projects : [];
   state.projects.push(project);
   state.activeProjectId = project.id;
+  markChanged(state);
   writeState(state);
   return { ok: true, project: { id: project.id, name: project.name }, mode: "local" };
 }
@@ -272,6 +283,7 @@ function localSetProject(state, projectId) {
   const project = (state.projects || []).find((item) => item.id === projectId);
   if (!project) return { ok: false, error: "找不到项目" };
   state.activeProjectId = project.id;
+  markChanged(state);
   writeState(state);
   return { ok: true, project: { id: project.id, name: project.name }, mode: "local" };
 }
@@ -386,6 +398,7 @@ async function todoistBoardData(state, config) {
       tokenConfigured: true,
       connected: true,
     },
+    revision: Number(state.revision) || 0,
     lastPlan: state.lastPlan || null,
     lastPlans: state.lastPlans || {},
     updatedAt: new Date().toISOString(),
@@ -443,6 +456,7 @@ async function todoistSyncPlan(state, config, steps, sessionId, turnId, source) 
   state.lastPlans = state.lastPlans && typeof state.lastPlans === "object" ? state.lastPlans : {};
   state.lastPlans[sessionId] = record;
   state.lastPlan = record;
+  markChanged(state);
   writeState(state);
 
   return {
@@ -493,6 +507,7 @@ export async function addTask(content, options = {}) {
     dueDate: options.dueDate,
     priority: options.priority,
   });
+  markChanged(state);
   writeState(state);
   return { ok: true, id: String(task.id), mode: "todoist", projectId: String(projectId) };
 }
@@ -534,6 +549,7 @@ export async function updateTask(taskId, patch = {}) {
       }
     }
   }
+  markChanged(state);
   writeState(state);
   return { ok: true, mode: "todoist" };
 }
@@ -550,6 +566,7 @@ export async function deleteTask(taskId) {
   for (const [key, entry] of Object.entries(state.planMap || {})) {
     if (String(entry.taskId) === String(taskId)) delete state.planMap[key];
   }
+  markChanged(state);
   writeState(state);
   return { ok: true, mode: "todoist" };
 }
@@ -568,6 +585,7 @@ export async function setTaskDone(taskId, done) {
   for (const entry of Object.values(state.planMap || {})) {
     if (String(entry.taskId) === String(taskId)) entry.done = Boolean(done);
   }
+  markChanged(state);
   writeState(state);
   return { ok: true, mode: "todoist" };
 }
@@ -581,6 +599,7 @@ export async function reorderTasks(taskIds) {
   }
 
   await todoist.reorderTasks(taskIds);
+  markChanged(state);
   writeState(state);
   return { ok: true, mode: "todoist" };
 }
@@ -597,6 +616,7 @@ export async function createProject(name) {
 
   const project = await todoist.createProject(text);
   state.activeProjectId = String(project.id);
+  markChanged(state);
   writeState(state);
   return {
     ok: true,
@@ -619,6 +639,7 @@ export async function setActiveProject(projectId) {
   );
   if (!project) return { ok: false, error: "找不到项目" };
   state.activeProjectId = String(project.id);
+  markChanged(state);
   writeState(state);
   return {
     ok: true,
@@ -693,6 +714,7 @@ export async function syncPlan({ steps, sessionId = "default", turnId = null, so
   state.lastPlans = state.lastPlans && typeof state.lastPlans === "object" ? state.lastPlans : {};
   state.lastPlans[sessionId] = record;
   state.lastPlan = record;
+  markChanged(state);
   writeState(state);
 
   return {

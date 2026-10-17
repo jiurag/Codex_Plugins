@@ -43,6 +43,7 @@ export function configPath() {
 
 const DEFAULT_STATE = {
   version: 2,
+  revision: 0,
   projectId: null,
   projects: [],
   labels: [],

@@ -17,10 +17,10 @@ import {
   syncPlanFromText,
   updateTask,
 } from "./lib/planner.mjs";
-import { readConfig } from "./lib/store.mjs";
+import { readConfig, readState } from "./lib/store.mjs";
 
 const SERVER_NAME = "todoist";
-const SERVER_VERSION = "0.6.1";
+const SERVER_VERSION = "0.6.2";
 const BOARD_URI = "ui://todoist/board.html";
 const BOARD_ICON = {
   src: "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IiM4ZjhmOGYiIHN0cm9rZS13aWR0aD0iMS43IiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxyZWN0IHg9IjMuNSIgeT0iMy41IiB3aWR0aD0iMTciIGhlaWdodD0iMTciIHJ4PSI1Ii8+PHBhdGggZD0ibTggMTIuMiAyLjYgMi42TDE2LjUgOSIvPjwvc3ZnPg==",
@@ -158,6 +158,13 @@ const TOOLS = [
       "读取 Codex 任务项目里的全部任务和完成状态。返回 tasks、stats、config、lastPlan，供任务清单面板或模型总结使用。",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     annotations: { readOnlyHint: true, openWorldHint: true },
+  },
+  {
+    name: "todoist_board_version",
+    title: "读取任务版本",
+    description: "返回任务清单的版本号，用于面板做轻量增量刷新。",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true, openWorldHint: false },
   },
   {
     name: "todoist_add_task",
@@ -414,6 +421,11 @@ async function handleToolCall(id, params) {
 
       case "todoist_board_data":
         return toolResult(id, await getBoardData());
+
+      case "todoist_board_version": {
+        const state = readState();
+        return toolResult(id, { version: Number(state.revision) || 0 });
+      }
 
       case "todoist_add_task":
         return toolResult(

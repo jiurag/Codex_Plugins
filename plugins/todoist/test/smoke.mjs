@@ -104,7 +104,7 @@ notify("notifications/initialized", {});
 
 const tools = await rpc("tools/list", {});
 const names = tools.tools.map((item) => item.name);
-for (const name of ["todoist_open_board", "todoist_board_data", "todoist_add_task", "todoist_complete_task", "todoist_sync_plan", "todoist_sync_last_plan", "todoist_sync_plan_from_hook"]) {
+for (const name of ["todoist_open_board", "todoist_board_data", "todoist_board_version", "todoist_add_task", "todoist_complete_task", "todoist_sync_plan", "todoist_sync_last_plan", "todoist_sync_plan_from_hook"]) {
   assert.ok(names.includes(name), "missing tool " + name);
 }
 const openBoard = tools.tools.find((item) => item.name === "todoist_open_board");
@@ -129,7 +129,10 @@ assert.ok(html.includes("tools/call"));
 const liveConfig = html.match(/const LIVE_CONFIG = \{ port: Number\("(\d+)"\), token: "([^"]+)" \};/);
 assert.ok(liveConfig, "live config missing");
 const sse = await openSse(`http://127.0.0.1:${liveConfig[1]}/events/${liveConfig[2]}`);
+const beforeVersion = (await tool("todoist_board_version")).structuredContent.version;
 const sseTask = await tool("todoist_add_task", { content: "SSE 测试任务" });
+const afterVersion = (await tool("todoist_board_version")).structuredContent.version;
+assert.ok(afterVersion > beforeVersion, "revision did not increase");
 await waitUntil(() => sse.getData().includes("event: changed"));
 sse.request.destroy();
 await tool("todoist_delete_task", { task_id: sseTask.structuredContent.id });
