@@ -796,5 +796,13 @@ export async function syncPlanFromText({ text, sessionId = "default", turnId = n
   if (steps.length > 0) {
     return syncPlan({ steps, sessionId, turnId, source: "hook-text" });
   }
-  return syncLastPlan(sessionId);
+  return {
+    ok: true,
+    skipped: true,
+    reason: "no-plan-in-text",
+    total: 0,
+    created: 0,
+    completed: 0,
+    reopened: 0,
+  };
 }

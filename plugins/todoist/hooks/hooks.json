@@ -21,6 +21,24 @@
         ]
       }
     ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "todoist",
+            "tool": "todoist_sync_plan_from_text",
+            "input": {
+              "text": "${prompt}",
+              "session_id": "${session_id}",
+              "turn_id": "${turn_id}"
+            },
+            "timeout": 20,
+            "statusMessage": "同步本轮计划到 Todoist"
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [

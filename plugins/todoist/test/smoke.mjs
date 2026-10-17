@@ -147,7 +147,22 @@ const textBoard = (await tool("todoist_board_data")).structuredContent;
 const textTasks = textBoard.tasks.filter((item) => item.content.startsWith("文本步骤"));
 assert.equal(textTasks.length, 2);
 for (const item of textTasks) await tool("todoist_delete_task", { task_id: item.id });
+const noPlan = await tool("todoist_sync_plan_from_text", { text: "这是一条普通消息，没有计划。", session_id: "text-test" });
+assert.equal(noPlan.structuredContent.ok, true);
+assert.equal(noPlan.structuredContent.skipped, true);
+assert.equal(noPlan.structuredContent.created, 0);
+const noPlanBoard = (await tool("todoist_board_data")).structuredContent;
+assert.equal(noPlanBoard.stats.total, 0, "non-plan text must not resurrect the last plan");
+console.log("PASS no-plan text does not resync");
 console.log("PASS text plan auto-sync");
+const implementationPrompt = "PLEASE IMPLEMENT THIS PLAN:\n# 三步验收\n\n## 计划\n1. 用户提交步骤 A\n2. 用户提交步骤 B\n3. 用户提交步骤 C";
+const promptSync = await tool("todoist_sync_plan_from_text", { text: implementationPrompt, session_id: "prompt-test" });
+assert.equal(promptSync.structuredContent.created, 3);
+const promptBoard = (await tool("todoist_board_data")).structuredContent;
+const promptTasks = promptBoard.tasks.filter((item) => item.content.startsWith("用户提交步骤"));
+assert.equal(promptTasks.length, 3);
+for (const item of promptTasks) await tool("todoist_delete_task", { task_id: item.id });
+console.log("PASS implementation prompt sync");
 console.log("PASS resources/read");
 
 const plan = [

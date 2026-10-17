@@ -20,7 +20,7 @@ import {
 import { readConfig, readState } from "./lib/store.mjs";
 
 const SERVER_NAME = "todoist";
-const SERVER_VERSION = "0.6.2";
+const SERVER_VERSION = "0.6.4";
 const BOARD_URI = "ui://todoist/board.html";
 const BOARD_ICON = {
   src: "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IiM4ZjhmOGYiIHN0cm9rZS13aWR0aD0iMS43IiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxyZWN0IHg9IjMuNSIgeT0iMy41IiB3aWR0aD0iMTciIGhlaWdodD0iMTciIHJ4PSI1Ii8+PHBhdGggZD0ibTggMTIuMiAyLjYgMi42TDE2LjUgOSIvPjwvc3ZnPg==",
@@ -281,7 +281,7 @@ const TOOLS = [
     name: "todoist_sync_plan_from_text",
     title: "同步计划文本（钩子）",
     description:
-      "供 Stop 钩子调用：从最后一条助手消息里提取计划清单并同步；没有可提取的计划时，回退到本会话最近一次计划。",
+      "供 UserPromptSubmit / Stop 钩子调用：从用户提交内容或最后一条助手消息里提取计划清单并同步；没有可提取的计划时跳过，不修改现有任务。",
     inputSchema: {
       type: "object",
       properties: {
