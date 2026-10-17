@@ -129,8 +129,8 @@ assert.ok(html.includes("tools/call"));
 assert.ok(html.includes("fluid-cloud"), "fluid cloud missing");
 assert.ok(html.includes("card-grid"), "card grid missing");
 assert.ok(html.includes("task-card"), "task cards missing");
-assert.ok(html.includes("card-session"), "session badge missing");
-assert.ok(html.includes("sessionLabel("), "session label helper missing");
+assert.ok(html.includes("sessionBar"), "session category bar missing");
+assert.ok(html.includes("sessionLabels"), "session title map missing");
 const liveConfig = html.match(/const LIVE_CONFIG = \{ port: Number\("(\d+)"\), token: "([^"]+)" \};/);
 assert.ok(liveConfig, "live config missing");
 const sse = await openSse(`http://127.0.0.1:${liveConfig[1]}/events/${liveConfig[2]}`);
@@ -184,6 +184,7 @@ assert.equal(board.stats.total, 3);
 assert.equal(board.stats.completed, 1);
 assert.equal(board.stats.active, 2);
 assert.equal(board.config.mode, "local");
+assert.ok(board.sessionLabels && typeof board.sessionLabels === "object", "session labels map missing");
 
 const taskB = board.tasks.find((item) => item.content === "步骤 B");
 await tool("todoist_complete_task", { task_id: taskB.id });

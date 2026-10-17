@@ -83,6 +83,28 @@ export function updateState(mutator) {
   return result;
 }
 
+export function readSessionLabels(sessionIds = []) {
+  const wanted = new Set((Array.isArray(sessionIds) ? sessionIds : []).map(String).filter(Boolean));
+  const labels = {};
+  if (wanted.size === 0) return labels;
+  const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
+  const indexPath = path.join(codexHome, "session_index.jsonl");
+  try {
+    const lines = fs.readFileSync(indexPath, "utf8").split(/\r?\n/);
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const entry = JSON.parse(line);
+        const id = String(entry.id || "");
+        if (wanted.has(id) && entry.thread_name) {
+          labels[id] = String(entry.thread_name).trim();
+        }
+      } catch {}
+    }
+  } catch {}
+  return labels;
+}
+
 export function readConfig() {
   const cfg = readJson(configPath(), {});
   const token = String(process.env.TODOIST_API_TOKEN || cfg.token || "").trim();

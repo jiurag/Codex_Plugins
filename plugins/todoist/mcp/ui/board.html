@@ -176,6 +176,9 @@
   .search-box input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--ink); font-size: 12.5px; }
   input::placeholder { color: var(--soft); }
   .filter-row { display: flex; flex-wrap: wrap; gap: 6px; }
+  .session-bar { display: flex; flex-wrap: wrap; gap: 6px; }
+  .session-chip { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .session-chip .n { margin-left: 4px; opacity: .55; font-variant-numeric: tabular-nums; }
   .chip {
     height: 28px; padding: 0 11px; border-radius: 10px; border: 1px solid transparent;
     background: rgba(127,127,127,.07); color: var(--muted); font-size: 11px;
@@ -202,7 +205,7 @@
   .content { display: grid; gap: 22px; }
   .section { animation: sectionIn .45s var(--spring) both; }
   .section-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
-  .section-head h2 { margin: 0; font-size: 12px; font-weight: 650; letter-spacing: .01em; }
+  .section-head h2 { margin: 0; max-width: min(72%, 520px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 650; letter-spacing: .01em; }
   .section-count { color: var(--soft); font-size: 10.5px; font-variant-numeric: tabular-nums; }
   .section-note { color: var(--soft); font-size: 10.5px; }
   .section-line { flex: 1; height: 1px; background: var(--line); }
@@ -232,7 +235,6 @@
   .task-card.is-active::before { opacity: 1; }
   .card-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; position: relative; z-index: 1; }
   .card-index { color: var(--soft); font-size: 10px; font-weight: 650; letter-spacing: .16em; font-variant-numeric: tabular-nums; }
-  .card-session { margin-left: auto; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--soft); font-size: 9px; letter-spacing: .015em; }
   .card-top .card-more { margin-left: 2px; flex: 0 0 auto; }
   .card-more { width: 24px; height: 24px; display: grid; place-items: center; border-radius: 8px; color: var(--soft); opacity: .55; transition: background .2s, color .2s, opacity .2s; }
   .task-card:hover .card-more, .card-more:focus-visible { opacity: 1; }
@@ -371,14 +373,7 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
           <input id="searchInput" type="text" placeholder="搜索任务或标签…" autocomplete="off" maxlength="120" />
         </div>
-        <div id="filterBar" class="filter-row">
-          <button type="button" class="chip active" data-filter="all">全部</button>
-          <button type="button" class="chip" data-filter="active">进行中</button>
-          <button type="button" class="chip" data-filter="done">已完成</button>
-          <button type="button" class="chip" data-filter="today">今天</button>
-          <button type="button" class="chip" data-filter="plan">计划</button>
-          <button type="button" class="chip" data-filter="manual">独立</button>
-        </div>
+        <div id="sessionBar" class="session-bar" aria-label="会话分类"></div>
         <div class="action-row">
           <div class="quick-add">
             <input id="newTask" type="text" placeholder="添加任务…" autocomplete="off" maxlength="500" />
@@ -419,7 +414,7 @@
   const $ = (id) => document.getElementById(id);
   const state = {
     data: null, connected: false, demo: false, busy: false, firstRender: true,
-    filter: "all", query: "", mode: null, live: false, liveSource: null,
+    sessionFilter: "all", query: "", mode: null, live: false, liveSource: null,
     revision: null, revisionTimer: null, refreshTimer: null, dragId: null,
   };
   let editingTask = null;
@@ -462,7 +457,7 @@
       if (window.parent === window) throw new Error("not-embedded");
       const params = {
         appCapabilities: { availableDisplayModes: ["inline", "fullscreen"] },
-        appInfo: { name: "Todoist", version: "0.6.7" },
+        appInfo: { name: "Todoist", version: "0.6.8" },
         protocolVersion: "2026-01-26",
       };
       let result;
@@ -566,21 +561,42 @@
   }
   function applyFilters(tasks) {
     const query = state.query.trim().toLowerCase();
-    const today = new Date().toISOString().slice(0, 10);
-    return tasks.filter((task) => {
-      if (query) {
-        const haystack = (task.content + " " + (task.labels || []).join(" ")).toLowerCase();
-        if (!haystack.includes(query)) return false;
-      }
-      switch (state.filter) {
-        case "active": return !task.checked;
-        case "done": return task.checked;
-        case "today": return task.dueDate === today;
-        case "plan": return task.source === "plan";
-        case "manual": return task.source !== "plan";
-        default: return true;
-      }
+    if (!query) return tasks;
+    return tasks.filter((task) => (task.content + " " + (task.labels || []).join(" ")).toLowerCase().includes(query));
+  }
+  function sessionKey(sessionId) { return sessionId ? String(sessionId) : "unassigned"; }
+  function renderSessionBar(data, tasks) {
+    const bar = $("sessionBar");
+    const counts = new Map();
+    tasks.forEach((task) => {
+      const key = sessionKey(task.sessionId);
+      counts.set(key, (counts.get(key) || 0) + 1);
     });
+    const plans = data.lastPlans && typeof data.lastPlans === "object" ? data.lastPlans : {};
+    const entries = Array.from(counts.entries()).sort((a, b) => {
+      const ta = a[0] !== "unassigned" && plans[a[0]] && plans[a[0]].updatedAt ? plans[a[0]].updatedAt : 0;
+      const tb = b[0] !== "unassigned" && plans[b[0]] && plans[b[0]].updatedAt ? plans[b[0]].updatedAt : 0;
+      if (ta !== tb) return tb - ta;
+      return sessionLabel(a[0] === "unassigned" ? null : a[0], data).localeCompare(sessionLabel(b[0] === "unassigned" ? null : b[0], data), "zh-CN");
+    });
+    const keys = new Set(entries.map(([key]) => key));
+    if (state.sessionFilter !== "all" && !keys.has(state.sessionFilter)) state.sessionFilter = "all";
+    bar.innerHTML = "";
+    const makeChip = (key, label, count) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "chip session-chip" + (state.sessionFilter === key ? " active" : "");
+      button.dataset.session = key;
+      button.title = key === "unassigned" ? "没有会话归属的任务" : key;
+      button.textContent = label;
+      const countEl = document.createElement("span");
+      countEl.className = "n";
+      countEl.textContent = String(count);
+      button.appendChild(countEl);
+      bar.appendChild(button);
+    };
+    makeChip("all", "全部会话", tasks.length);
+    entries.forEach(([key, count]) => makeChip(key, sessionLabel(key === "unassigned" ? null : key, data), count));
   }
   function sectionNode(label, count, note, animate) {
     const section = document.createElement("section");
@@ -610,7 +626,9 @@
     return clean ? clean.slice(-6) : "default";
   }
   function sessionLabel(sessionId, data = state.data) {
-    if (!sessionId) return "未标记";
+    if (!sessionId) return "未标记会话";
+    const title = data && data.sessionLabels ? data.sessionLabels[String(sessionId)] : "";
+    if (title) return title;
     const short = sessionShort(sessionId);
     const latest = data && data.lastPlan && data.lastPlan.sessionId ? String(data.lastPlan.sessionId) : "";
     return (latest === String(sessionId) ? "最近会话 · " : "会话 ") + short;
@@ -650,17 +668,13 @@
     const indexEl = document.createElement("span");
     indexEl.className = "card-index";
     indexEl.textContent = kind === "plan" ? String((index || 0) + 1).padStart(2, "0") : "TASK";
-    const session = document.createElement("span");
-    session.className = "card-session";
-    session.textContent = sessionLabel(task.sessionId);
-    session.title = task.sessionId || "未标记";
     const more = document.createElement("button");
     more.className = "card-more pressable";
     more.type = "button";
     more.setAttribute("aria-label", "编辑任务");
     more.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg>';
     more.addEventListener("click", (event) => { event.stopPropagation(); openEditor(task); });
-    top.append(indexEl, session, more);
+    top.append(indexEl, more);
 
     const main = document.createElement("div");
     main.className = "card-main";
@@ -711,6 +725,7 @@
     content.innerHTML = "";
     const tasks = Array.isArray(data.tasks) ? data.tasks : [];
     const visible = applyFilters(tasks);
+    renderSessionBar(data, visible);
     if (tasks.length > 0 && visible.length === 0) {
       const empty = document.createElement("div");
       empty.className = "no-results";
@@ -727,36 +742,29 @@
       content.appendChild(empty);
       return;
     }
-    const plan = visible.filter((task) => task.source === "plan");
-    const manual = visible.filter((task) => task.source !== "plan");
-    if (plan.length) {
-      const groups = new Map();
-      plan.forEach((task) => {
-        const key = task.sessionId || "default";
-        if (!groups.has(key)) groups.set(key, []);
-        groups.get(key).push(task);
-      });
-      const plans = data.lastPlans && typeof data.lastPlans === "object" ? data.lastPlans : {};
-      const ordered = Array.from(groups.entries()).sort((a, b) => {
-        const ta = plans[a[0]] && plans[a[0]].updatedAt ? plans[a[0]].updatedAt : 0;
-        const tb = plans[b[0]] && plans[b[0]].updatedAt ? plans[b[0]].updatedAt : 0;
-        return tb - ta;
-      });
-      ordered.forEach(([sessionId, items]) => {
-        const record = plans[sessionId];
-        const time = record && record.updatedAt ? new Date(record.updatedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }) : "";
-        const section = sectionNode("计划", items.length, `${sessionLabel(sessionId, data)}${time ? " · " + time : ""}`, animate);
-        const grid = document.createElement("div"); grid.className = "card-grid";
-        items.forEach((task, index) => grid.appendChild(cardNode(task, index, "plan", animate)));
-        section.appendChild(grid); content.appendChild(section);
-      });
-    }
-    if (manual.length) {
-      const section = sectionNode("任务", manual.length, "", animate);
-      const grid = document.createElement("div"); grid.className = "card-grid";
-      manual.forEach((task, index) => grid.appendChild(cardNode(task, index, "manual", animate)));
-      section.appendChild(grid); content.appendChild(section);
-    }
+    const groups = new Map();
+    visible.forEach((task) => {
+      const key = sessionKey(task.sessionId);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(task);
+    });
+    const plans = data.lastPlans && typeof data.lastPlans === "object" ? data.lastPlans : {};
+    const ordered = Array.from(groups.entries()).sort((a, b) => {
+      const ta = a[0] !== "unassigned" && plans[a[0]] && plans[a[0]].updatedAt ? plans[a[0]].updatedAt : 0;
+      const tb = b[0] !== "unassigned" && plans[b[0]] && plans[b[0]].updatedAt ? plans[b[0]].updatedAt : 0;
+      if (ta !== tb) return tb - ta;
+      return sessionLabel(a[0] === "unassigned" ? null : a[0], data).localeCompare(sessionLabel(b[0] === "unassigned" ? null : b[0], data), "zh-CN");
+    });
+    ordered.filter(([key]) => state.sessionFilter === "all" || state.sessionFilter === key).forEach(([key, items]) => {
+      const record = key !== "unassigned" ? plans[key] : null;
+      const time = record && record.updatedAt ? new Date(record.updatedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }) : "";
+      const section = sectionNode(sessionLabel(key === "unassigned" ? null : key, data), items.length, time, animate);
+      const grid = document.createElement("div");
+      grid.className = "card-grid";
+      items.forEach((task, index) => grid.appendChild(cardNode(task, index, task.source === "plan" ? "plan" : "manual", animate)));
+      section.appendChild(grid);
+      content.appendChild(section);
+    });
   }
   function render(data, animate) {
     state.data = data;
@@ -930,6 +938,7 @@
       ],
       stats: { total: 5, completed: 2, active: 3, percent: 40 },
       lastPlans: { demo: { steps: [{ step: "梳理 Todoist 同步规则", status: "completed" }, { step: "把 Codex 计划步骤自动建成任务", status: "completed" }, { step: "在侧边栏展示完成进度", status: "pending" }], updatedAt: Date.now() } },
+      sessionLabels: { demo: "Todoist 面板重设计" },
       lastPlan: { sessionId: "demo", steps: [{ step: "梳理 Todoist 同步规则", status: "completed" }], updatedAt: Date.now() },
       config: { mode: "local" }
     };
@@ -952,10 +961,9 @@
   $("addBtn").addEventListener("click", addTask);
   $("newTask").addEventListener("keydown", (event) => { if (event.key === "Enter") addTask(); });
   $("searchInput").addEventListener("input", (event) => { state.query = event.target.value; if (state.data) renderSections(state.data, false); });
-  $("filterBar").addEventListener("click", (event) => {
-    const chip = event.target.closest("[data-filter]"); if (!chip) return;
-    state.filter = chip.dataset.filter;
-    document.querySelectorAll("#filterBar .chip").forEach((button) => button.classList.toggle("active", button === chip));
+  $("sessionBar").addEventListener("click", (event) => {
+    const chip = event.target.closest("[data-session]"); if (!chip) return;
+    state.sessionFilter = chip.dataset.session;
     if (state.data) renderSections(state.data, false);
   });
   $("syncPlanBtn").addEventListener("click", syncPlan);

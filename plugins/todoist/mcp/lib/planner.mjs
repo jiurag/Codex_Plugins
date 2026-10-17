@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { readConfig, readState, writeState } from "./store.mjs";
+import { readConfig, readSessionLabels, readState, writeState } from "./store.mjs";
 import * as todoist from "./todoist.mjs";
 
 export function planKey(sessionId, step) {
@@ -148,6 +148,14 @@ function localBoardData(state) {
     revision: Number(state.revision) || 0,
     lastPlan: state.lastPlan || null,
     lastPlans: state.lastPlans || {},
+    sessionLabels: readSessionLabels([...new Set([
+      ...tasks.map((task) => task.sessionId).filter(Boolean),
+      ...Object.keys(state.lastPlans || {}),
+    ])]),
+    sessionLabels: readSessionLabels([...new Set([
+      ...boardTasks.map((task) => task.sessionId).filter(Boolean),
+      ...Object.keys(state.lastPlans || {}),
+    ])]),
     updatedAt: new Date().toISOString(),
   };
 }
