@@ -129,6 +129,8 @@ assert.ok(html.includes("tools/call"));
 assert.ok(html.includes("fluid-cloud"), "fluid cloud missing");
 assert.ok(html.includes("card-grid"), "card grid missing");
 assert.ok(html.includes("task-card"), "task cards missing");
+assert.ok(html.includes("card-session"), "session badge missing");
+assert.ok(html.includes("sessionLabel("), "session label helper missing");
 const liveConfig = html.match(/const LIVE_CONFIG = \{ port: Number\("(\d+)"\), token: "([^"]+)" \};/);
 assert.ok(liveConfig, "live config missing");
 const sse = await openSse(`http://127.0.0.1:${liveConfig[1]}/events/${liveConfig[2]}`);

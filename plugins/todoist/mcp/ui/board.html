@@ -232,6 +232,8 @@
   .task-card.is-active::before { opacity: 1; }
   .card-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; position: relative; z-index: 1; }
   .card-index { color: var(--soft); font-size: 10px; font-weight: 650; letter-spacing: .16em; font-variant-numeric: tabular-nums; }
+  .card-session { margin-left: auto; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--soft); font-size: 9px; letter-spacing: .015em; }
+  .card-top .card-more { margin-left: 2px; flex: 0 0 auto; }
   .card-more { width: 24px; height: 24px; display: grid; place-items: center; border-radius: 8px; color: var(--soft); opacity: .55; transition: background .2s, color .2s, opacity .2s; }
   .task-card:hover .card-more, .card-more:focus-visible { opacity: 1; }
   .card-more:hover { color: var(--ink); background: rgba(127,127,127,.13); }
@@ -460,7 +462,7 @@
       if (window.parent === window) throw new Error("not-embedded");
       const params = {
         appCapabilities: { availableDisplayModes: ["inline", "fullscreen"] },
-        appInfo: { name: "Todoist", version: "0.6.6" },
+        appInfo: { name: "Todoist", version: "0.6.7" },
         protocolVersion: "2026-01-26",
       };
       let result;
@@ -554,7 +556,8 @@
     const hint = $("lastPlanHint");
     const button = $("syncPlanBtn");
     if (last && Array.isArray(last.steps) && last.steps.length) {
-      hint.textContent = `最近计划 ${last.steps.length} 步` + (last.updatedAt ? ` · ${new Date(last.updatedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}` : "");
+      const session = last.sessionId ? ` · ${sessionLabel(last.sessionId, data)}` : "";
+      hint.textContent = `最近计划 ${last.steps.length} 步` + session + (last.updatedAt ? ` · ${new Date(last.updatedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}` : "");
       button.disabled = false;
     } else {
       hint.textContent = "在对话里说「同步计划到 Todoist」";
@@ -602,6 +605,16 @@
     section.appendChild(head);
     return section;
   }
+  function sessionShort(sessionId) {
+    const clean = String(sessionId || "").replace(/[^a-zA-Z0-9]/g, "");
+    return clean ? clean.slice(-6) : "default";
+  }
+  function sessionLabel(sessionId, data = state.data) {
+    if (!sessionId) return "未标记";
+    const short = sessionShort(sessionId);
+    const latest = data && data.lastPlan && data.lastPlan.sessionId ? String(data.lastPlan.sessionId) : "";
+    return (latest === String(sessionId) ? "最近会话 · " : "会话 ") + short;
+  }
   function statusText(task) {
     if (task.checked) return "已完成";
     if (task.planStatus === "inProgress") return "进行中";
@@ -637,13 +650,17 @@
     const indexEl = document.createElement("span");
     indexEl.className = "card-index";
     indexEl.textContent = kind === "plan" ? String((index || 0) + 1).padStart(2, "0") : "TASK";
+    const session = document.createElement("span");
+    session.className = "card-session";
+    session.textContent = sessionLabel(task.sessionId);
+    session.title = task.sessionId || "未标记";
     const more = document.createElement("button");
     more.className = "card-more pressable";
     more.type = "button";
     more.setAttribute("aria-label", "编辑任务");
     more.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg>';
     more.addEventListener("click", (event) => { event.stopPropagation(); openEditor(task); });
-    top.append(indexEl, more);
+    top.append(indexEl, session, more);
 
     const main = document.createElement("div");
     main.className = "card-main";
@@ -728,7 +745,7 @@
       ordered.forEach(([sessionId, items]) => {
         const record = plans[sessionId];
         const time = record && record.updatedAt ? new Date(record.updatedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }) : "";
-        const section = sectionNode("计划", items.length, time, animate);
+        const section = sectionNode("计划", items.length, `${sessionLabel(sessionId, data)}${time ? " · " + time : ""}`, animate);
         const grid = document.createElement("div"); grid.className = "card-grid";
         items.forEach((task, index) => grid.appendChild(cardNode(task, index, "plan", animate)));
         section.appendChild(grid); content.appendChild(section);
