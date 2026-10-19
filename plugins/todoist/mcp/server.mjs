@@ -20,7 +20,7 @@ import {
 import { readConfig, readState } from "./lib/store.mjs";
 
 const SERVER_NAME = "todoist";
-const SERVER_VERSION = "0.8.2";
+const SERVER_VERSION = "0.9.0";
 const BOARD_URI = "ui://todoist/board.html";
 const BOARD_ICON = {
   src: "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IiM4ZjhmOGYiIHN0cm9rZS13aWR0aD0iMS43IiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxyZWN0IHg9IjMuNSIgeT0iMy41IiB3aWR0aD0iMTciIGhlaWdodD0iMTciIHJ4PSI1Ii8+PHBhdGggZD0ibTggMTIuMiAyLjYgMi42TDE2LjUgOSIvPjwvc3ZnPg==",
@@ -145,7 +145,7 @@ const TOOLS = [
     name: "todoist_open_board",
     title: "Todoist",
     description:
-      "在 Codex 侧边栏或对话侧栏打开任务清单面板，可查看哪些任务已完成、哪些还没做。",
+      "在 Codex 侧边栏或对话侧栏打开任务清单面板，查看待办、编辑任务、同步计划。计划步骤完成后会自动移出清单。",
     icons: [BOARD_ICON],
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     annotations: { readOnlyHint: true, openWorldHint: false },
@@ -187,7 +187,7 @@ const TOOLS = [
   {
     name: "todoist_complete_task",
     title: "完成任务",
-    description: "把指定任务标记为完成。",
+    description: "把指定任务标记为完成。由计划生成的任务完成后会自动移出清单。",
     inputSchema: {
       type: "object",
       properties: {
@@ -216,7 +216,7 @@ const TOOLS = [
     name: "todoist_sync_plan",
     title: "同步计划到 Todoist",
     description:
-      "把一组计划步骤同步成 Todoist 任务：缺失的创建，已完成的自动勾掉。步骤格式为 [{step, status}]，status 可为 pending、inProgress、completed。Codex 每完成一步都应立即传入完整步骤列表并更新 status；重复调用不会重复建任务。",
+      "把一组计划步骤同步成 Todoist 任务：缺失的创建，已完成的自动移出清单。步骤格式为 [{step, status}]，status 可为 pending、inProgress、completed。Codex 每完成一步都应立即传入完整步骤列表并更新 status；重复调用不会重复建任务，也不会把已移除的步骤重新建回来。",
     inputSchema: {
       type: "object",
       properties: {

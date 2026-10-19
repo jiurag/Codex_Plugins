@@ -201,6 +201,7 @@
   .task-card:hover::before { opacity: 1; }
   .task-card.completed { opacity: .72; background: rgba(127,127,127,.09); box-shadow: none; }
   .task-card.completed::after { background: linear-gradient(90deg, var(--faint), transparent); }
+  .task-card.removing { pointer-events: none; animation: cardOut .36s cubic-bezier(.4,0,.2,1) forwards; }
   .card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; position: relative; z-index: 1; }
   .card-kind { color: var(--faint); font-size: 10px; font-weight: 650; letter-spacing: .14em; text-transform: uppercase; font-variant-numeric: tabular-nums; }
   .card-more { width: 27px; height: 27px; display: grid; place-items: center; border-radius: 9px; color: var(--faint); opacity: .6; transition: opacity .2s, background .2s, color .2s; }
@@ -265,6 +266,7 @@
   @keyframes breath { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
   @keyframes groupIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
   @keyframes cardIn { from { opacity: 0; transform: translateY(16px) scale(.97); filter: blur(3px); } to { opacity: 1; transform: none; filter: none; } }
+  @keyframes cardOut { to { opacity: 0; transform: translateY(-12px) scale(.93); filter: blur(5px); } }
   .session-group.reveal .task-card { animation: cardIn .52s var(--spring) both; animation-delay: calc(var(--i, 0) * 38ms); }
   @media (max-width: 980px) {
     .app { padding: 18px 20px 24px; }
@@ -463,7 +465,7 @@
     function notify(method, params) { window.parent.postMessage({ jsonrpc: "2.0", method, params }, "*"); }
     async function connect() {
       if (window.parent === window) throw new Error("not-embedded");
-      const params = { appCapabilities: { availableDisplayModes: ["inline", "fullscreen"] }, appInfo: { name: "Todoist", version: "0.8.2" }, protocolVersion: "2026-01-26" };
+      const params = { appCapabilities: { availableDisplayModes: ["inline", "fullscreen"] }, appInfo: { name: "Todoist", version: "0.9.0" }, protocolVersion: "2026-01-26" };
       let result;
       try { result = await request("ui/initialize", params, 4000); } catch { result = await request("ui/initialize", params, 4000); }
       notify("ui/notifications/initialized", {});
@@ -544,7 +546,7 @@
     if (last && Array.isArray(last.steps) && last.steps.length) {
       const session = last.sessionId ? ` · ${sessionLabel(last.sessionId, data)}` : "";
       const time = last.updatedAt ? ` · ${new Date(last.updatedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}` : "";
-      $("lastPlanHint").textContent = `最近计划 ${last.steps.length} 步` + session + time;
+      $("lastPlanHint").textContent = `最近计划 ${last.steps.length} 步 · 完成即移除` + session + time;
       $("syncPlanBtn").disabled = false;
     } else { $("lastPlanHint").textContent = "在对话里说「同步计划到 Todoist」"; $("syncPlanBtn").disabled = true; }
   }
@@ -552,7 +554,8 @@
     const key = state.sessionFilter;
     $("cloudTitle").textContent = key === "all" ? "全部会话" : sessionLabel(key === "unassigned" ? null : key, data);
     const done = visible.filter((task) => task.checked).length;
-    $("cloudSummary").textContent = String(visible.length) + " 项任务 · " + String(done) + " 项已完成";
+    const archived = Number(data.stats && data.stats.archivedCompleted) || 0;
+    $("cloudSummary").textContent = String(visible.length) + " 项待办 · " + String(done) + " 项已完成" + (archived ? " · " + String(archived) + " 步已移除" : "");
   }
   function filterTasks(tasks) {
     const query = state.query.trim().toLowerCase();
@@ -676,9 +679,34 @@
     try { const result = await bridge.callTool("todoist_board_version", {}); const data = unwrap(result); if (data && Number(data.version) !== state.revision) await load(true); } catch {}
   }
   async function toggleTask(task) {
-    if (state.busy) return; const previous = task.checked; task.checked = !previous; render(state.data, false);
-    try { const result = await bridge.callTool(previous ? "todoist_reopen_task" : "todoist_complete_task", { task_id: task.id }); const data = unwrap(result); if (data && data.ok === false) throw new Error(data.error || "操作失败"); await load(true); }
-    catch (error) { task.checked = previous; render(state.data, false); toast(error instanceof Error ? error.message : "操作失败", "error"); }
+    if (state.busy) return;
+    const previous = task.checked;
+    const completing = !previous;
+    state.busy = true;
+    task.checked = completing;
+    render(state.data, false);
+    try {
+      const result = await bridge.callTool(completing ? "todoist_complete_task" : "todoist_reopen_task", { task_id: task.id });
+      const data = unwrap(result);
+      if (data && data.ok === false) throw new Error(data.error || "操作失败");
+      if (data && data.autoDeleted) {
+        const card = Array.from(document.querySelectorAll(".task-card")).find((item) => item.dataset.id === String(task.id));
+        if (card) {
+          card.classList.add("removing");
+          await new Promise((resolve) => setTimeout(resolve, 360));
+        }
+        toast("已完成，已自动移出清单");
+      } else {
+        toast(completing ? "已完成" : "已恢复");
+      }
+      await load(true);
+    } catch (error) {
+      task.checked = previous;
+      render(state.data, false);
+      toast(error instanceof Error ? error.message : "操作失败", "error");
+    } finally {
+      state.busy = false;
+    }
   }
   async function reorderTasks(sourceId, targetId) {
     if (!state.data || !Array.isArray(state.data.tasks)) return;
@@ -723,7 +751,7 @@
   }
   async function syncPlan() {
     if (state.busy) return; state.busy = true; $("syncPlanBtn").disabled = true;
-    try { const result = await bridge.callTool("todoist_sync_last_plan", {}); const data = unwrap(result); if (data && data.ok === false) throw new Error(data.error || "同步失败"); toast(`已同步：新建 ${data.created || 0}，完成 ${data.completed || 0}`); await load(true); }
+    try { const result = await bridge.callTool("todoist_sync_last_plan", {}); const data = unwrap(result); if (data && data.ok === false) throw new Error(data.error || "同步失败"); toast(`已同步：新建 ${data.created || 0}，完成并移除 ${data.completed || 0}`); await load(true); }
     catch (error) { toast(error instanceof Error ? error.message : "同步失败", "error"); }
     finally { state.busy = false; $("syncPlanBtn").disabled = false; }
   }  async function createProject() {
@@ -748,7 +776,7 @@
         { id: "demo-4", content: "补上 Token 配置和错误提示", checked: false, source: "manual", planStatus: "pending", sessionId: "demo", projectId: "demo-project", labels: ["配置"], due: "", dueDate: "", priority: 3, order: 4 },
         { id: "demo-5", content: "验证真实 Todoist 账号读写", checked: false, source: "manual", planStatus: "pending", sessionId: "demo", projectId: "demo-project", labels: [], due: "", dueDate: "", priority: 4, order: 5 }
       ],
-      stats: { total: 5, completed: 2, active: 3, percent: 40 },
+      stats: { total: 5, completed: 2, active: 3, archivedCompleted: 0, percent: 40 },
       lastPlans: { demo: { steps: [{ step: "梳理 Todoist 同步规则", status: "completed" }, { step: "把 Codex 计划步骤自动建成任务", status: "completed" }, { step: "在侧边栏展示完成进度", status: "pending" }], updatedAt: Date.now() } },
       lastPlan: { sessionId: "demo", steps: [{ step: "梳理 Todoist 同步规则", status: "completed" }], updatedAt: Date.now() },
       sessionLabels: { demo: "Todoist 面板重设计" },

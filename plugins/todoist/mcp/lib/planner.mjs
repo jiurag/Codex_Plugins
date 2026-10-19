@@ -118,15 +118,57 @@ function localTaskToBoard(task, project, planEntry) {
   };
 }
 
+function planEntryForTask(state, taskId) {
+  return Object.entries(state.planMap || {}).find(
+    ([, entry]) => entry && String(entry.taskId) === String(taskId),
+  ) || null;
+}
+
+function archivedPlanEntries(state, projectId) {
+  return Object.values(state.planMap || {}).filter(
+    (entry) => entry && entry.deletedAt && entry.done === true
+      && (!entry.projectId || String(entry.projectId) === String(projectId)),
+  );
+}
+
+function archiveCompletedPlanEntry(state, task) {
+  const found = planEntryForTask(state, task.id);
+  if (!found) return null;
+  const [, entry] = found;
+  entry.done = true;
+  entry.status = "completed";
+  entry.deletedAt = entry.deletedAt || Date.now();
+  entry.deletedReason = "completed";
+  entry.updatedAt = Date.now();
+  if (!entry.projectId) entry.projectId = task.projectId || null;
+  return entry;
+}
+
+function removeLocalTask(state, taskId) {
+  const tasks = state.localTasks || [];
+  const index = tasks.findIndex((item) => String(item.id) === String(taskId));
+  if (index < 0) return false;
+  tasks.splice(index, 1);
+  return true;
+}
+
 function localBoardData(state) {
   const project = ensureLocalProject(state);
+  for (const task of localTasksFor(state, project.id)) {
+    if (task.source === "plan" && task.completed && archiveCompletedPlanEntry(state, task)) {
+      removeLocalTask(state, task.id);
+    }
+  }
   const tasks = localTasksFor(state, project.id);
   const boardTasks = tasks.map((task) => {
     const entry = task.planKey ? state.planMap?.[task.planKey] : null;
     return localTaskToBoard(task, project, entry);
   });
-  const completed = boardTasks.filter((task) => task.checked).length;
+  const archived = archivedPlanEntries(state, project.id).length;
+  const completedNow = boardTasks.filter((task) => task.checked).length;
   const labels = Array.from(new Set(boardTasks.flatMap((task) => task.labels))).sort();
+  const completed = completedNow + archived;
+  const total = boardTasks.length + archived;
 
   return {
     tasks: boardTasks,
@@ -134,24 +176,22 @@ function localBoardData(state) {
     activeProjectId: project.id,
     labels,
     stats: {
-      total: boardTasks.length,
+      total,
       completed,
-      active: boardTasks.length - completed,
-      percent: boardTasks.length ? Math.round((completed / boardTasks.length) * 100) : 0,
+      active: boardTasks.length - completedNow,
+      archivedCompleted: archived,
+      percent: total ? Math.round((completed / total) * 100) : 0,
     },
     config: {
       mode: "local",
       projectName: project.name,
       tokenConfigured: false,
       connected: false,
+      autoDeleteCompleted: true,
     },
     revision: Number(state.revision) || 0,
     lastPlan: state.lastPlan || null,
     lastPlans: state.lastPlans || {},
-    sessionLabels: readSessionLabels([...new Set([
-      ...tasks.map((task) => task.sessionId).filter(Boolean),
-      ...Object.keys(state.lastPlans || {}),
-    ])]),
     sessionLabels: readSessionLabels([...new Set([
       ...boardTasks.map((task) => task.sessionId).filter(Boolean),
       ...Object.keys(state.lastPlans || {}),
@@ -248,6 +288,15 @@ function localDeleteTask(state, taskId) {
 function localSetDone(state, taskId, done) {
   const task = (state.localTasks || []).find((item) => String(item.id) === String(taskId));
   if (!task) return { ok: false, error: "找不到任务" };
+
+  if (done && task.source === "plan") {
+    archiveCompletedPlanEntry(state, task);
+    removeLocalTask(state, taskId);
+    markChanged(state);
+    writeState(state);
+    return { ok: true, mode: "local", autoDeleted: true, id: String(taskId) };
+  }
+
   task.completed = Boolean(done);
   task.completedAt = done ? Date.now() : null;
   for (const entry of Object.values(state.planMap || {})) {
@@ -255,7 +304,7 @@ function localSetDone(state, taskId, done) {
   }
   markChanged(state);
   writeState(state);
-  return { ok: true, mode: "local" };
+  return { ok: true, mode: "local", autoDeleted: false, id: String(taskId) };
 }
 
 function localReorder(state, taskIds) {
@@ -345,49 +394,38 @@ async function todoistBoardData(state, config) {
     if (entry?.taskId) entryByTaskId.set(String(entry.taskId), entry);
   }
 
-  const items = snapshot.items.filter(
-    (item) => !item.is_deleted && String(item.project_id || "") === String(project.id),
-  );
+  const items = snapshot.items.filter((item) => {
+    if (item.is_deleted || String(item.project_id || "") !== String(project.id)) return false;
+    const entry = entryByTaskId.get(String(item.id));
+    return !entry?.deletedAt;
+  });
 
   const tasks = [];
-  const seen = new Set();
   for (const item of items) {
     const entry = entryByTaskId.get(String(item.id));
     const task = todoistTaskFromItem(item, entry);
     task.projectName = project.name;
+    if (entry && task.checked) {
+      entry.done = true;
+      entry.status = "completed";
+      entry.deletedAt = entry.deletedAt || Date.now();
+      entry.deletedReason = "completed";
+      entry.updatedAt = Date.now();
+      continue;
+    }
     if (entry) {
       entry.done = task.checked;
       entry.content = task.content || entry.content;
     }
-    seen.add(task.id);
     tasks.push(task);
   }
 
-  for (const entry of Object.values(state.planMap || {})) {
-    if (!entry?.taskId || seen.has(String(entry.taskId)) || entry.done !== true) continue;
-    if (entry.projectId && String(entry.projectId) !== String(project.id)) continue;
-    tasks.push({
-      id: String(entry.taskId),
-      content: String(entry.content || ""),
-      checked: true,
-      due: "",
-      dueDate: "",
-      priority: 4,
-      labels: [],
-      projectId: String(project.id),
-      projectName: project.name,
-      source: "plan",
-      planStatus: "completed",
-      sessionId: entry.sessionId || null,
-      order: 0,
-      createdAt: null,
-      completedAt: null,
-    });
-  }
-
   tasks.sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0));
-  const completed = tasks.filter((task) => task.checked).length;
+  const archived = archivedPlanEntries(state, project.id).length;
+  const completedNow = tasks.filter((task) => task.checked).length;
   const labels = Array.from(new Set(tasks.flatMap((task) => task.labels))).sort();
+  const completed = completedNow + archived;
+  const total = tasks.length + archived;
 
   return {
     tasks,
@@ -395,16 +433,18 @@ async function todoistBoardData(state, config) {
     activeProjectId: String(project.id),
     labels,
     stats: {
-      total: tasks.length,
+      total,
       completed,
-      active: tasks.length - completed,
-      percent: tasks.length ? Math.round((completed / tasks.length) * 100) : 0,
+      active: tasks.length - completedNow,
+      archivedCompleted: archived,
+      percent: total ? Math.round((completed / total) * 100) : 0,
     },
     config: {
       mode: "todoist",
       projectName: project.name,
       tokenConfigured: true,
       connected: true,
+      autoDeleteCompleted: true,
     },
     revision: Number(state.revision) || 0,
     lastPlan: state.lastPlan || null,
@@ -425,31 +465,63 @@ async function todoistSyncPlan(state, config, steps, sessionId, turnId, source) 
     const wantsDone = step.status === "completed";
 
     if (!entry) {
-      const task = await todoist.createTask({
-        content: step.step,
-        description: `Codex 计划步骤 · ${new Date().toISOString()}`,
-        projectId: project.id,
-      });
-      entry = {
-        taskId: String(task.id),
-        content: step.step,
-        status: step.status,
-        done: false,
-        sessionId,
-      };
-      state.planMap[key] = entry;
-      created += 1;
+      if (wantsDone) {
+        entry = {
+          taskId: null,
+          content: step.step,
+          status: "completed",
+          done: true,
+          sessionId,
+          projectId: String(project.id),
+          deletedAt: Date.now(),
+          deletedReason: "completed",
+          updatedAt: Date.now(),
+        };
+        state.planMap[key] = entry;
+        completed += 1;
+      } else {
+        const task = await todoist.createTask({
+          content: step.step,
+          description: "Codex 计划步骤 · " + new Date().toISOString(),
+          projectId: project.id,
+        });
+        entry = {
+          taskId: String(task.id),
+          content: step.step,
+          status: step.status,
+          done: false,
+          sessionId,
+          projectId: String(project.id),
+        };
+        state.planMap[key] = entry;
+        created += 1;
+      }
+    }
+
+    if (entry && entry.deletedAt && !wantsDone) {
+      entry.done = true;
+      entry.status = "completed";
+      entry.updatedAt = Date.now();
+      continue;
     }
 
     entry.content = step.step;
-    entry.status = step.status;
+    entry.status = wantsDone ? "completed" : step.status;
     entry.sessionId = sessionId;
     entry.projectId = String(project.id);
     entry.updatedAt = Date.now();
 
-    if (wantsDone && entry.done !== true) {
-      await todoist.closeTask(entry.taskId);
+    if (wantsDone && !entry.deletedAt) {
+      if (entry.taskId) {
+        try {
+          await todoist.deleteTask(entry.taskId);
+        } catch {
+          await todoist.closeTask(entry.taskId);
+        }
+      }
       entry.done = true;
+      entry.deletedAt = Date.now();
+      entry.deletedReason = "completed";
       completed += 1;
     }
   }
@@ -472,6 +544,7 @@ async function todoistSyncPlan(state, config, steps, sessionId, turnId, source) 
     total: steps.length,
     created,
     completed,
+    autoDeleted: completed,
     reopened: 0,
     mode: "todoist",
   };
@@ -587,15 +660,43 @@ export async function setTaskDone(taskId, done) {
     return localSetDone(state, taskId, done);
   }
 
-  if (done) await todoist.closeTask(taskId);
-  else await todoist.reopenTask(taskId);
+  const entry = planEntryForTask(state, taskId)?.[1] || null;
 
-  for (const entry of Object.values(state.planMap || {})) {
-    if (String(entry.taskId) === String(taskId)) entry.done = Boolean(done);
+  if (done) {
+    if (entry) {
+      if (!entry.deletedAt) {
+        try {
+          await todoist.deleteTask(taskId);
+        } catch {
+          await todoist.closeTask(taskId);
+        }
+      }
+      entry.done = true;
+      entry.status = "completed";
+      entry.deletedAt = entry.deletedAt || Date.now();
+      entry.deletedReason = "completed";
+      entry.updatedAt = Date.now();
+      markChanged(state);
+      writeState(state);
+      return { ok: true, mode: "todoist", autoDeleted: true, id: String(taskId) };
+    }
+
+    await todoist.closeTask(taskId);
+    markChanged(state);
+    writeState(state);
+    return { ok: true, mode: "todoist", autoDeleted: false, id: String(taskId) };
+  }
+
+  if (entry?.deletedAt) {
+    return { ok: false, error: "这条任务已经完成并移除了" };
+  }
+  await todoist.reopenTask(taskId);
+  for (const item of Object.values(state.planMap || {})) {
+    if (String(item.taskId) === String(taskId)) item.done = false;
   }
   markChanged(state);
   writeState(state);
-  return { ok: true, mode: "todoist" };
+  return { ok: true, mode: "todoist", autoDeleted: false, id: String(taskId) };
 }
 
 export async function reorderTasks(taskIds) {
@@ -679,37 +780,61 @@ export async function syncPlan({ steps, sessionId = "default", turnId = null, so
     const wantsDone = step.status === "completed";
 
     if (!entry) {
-      const task = createLocalTask(state, project.id, {
-        content: step.step,
-        source: "plan",
-        sessionId,
-        planKey: key,
-      });
-      entry = {
-        taskId: task.id,
-        content: step.step,
-        status: step.status,
-        done: false,
-        sessionId,
-        projectId: project.id,
-      };
-      state.planMap[key] = entry;
-      created += 1;
+      if (wantsDone) {
+        entry = {
+          taskId: null,
+          content: step.step,
+          status: "completed",
+          done: true,
+          sessionId,
+          projectId: project.id,
+          deletedAt: Date.now(),
+          deletedReason: "completed",
+          updatedAt: Date.now(),
+        };
+        state.planMap[key] = entry;
+        completed += 1;
+      } else {
+        const task = createLocalTask(state, project.id, {
+          content: step.step,
+          source: "plan",
+          sessionId,
+          planKey: key,
+        });
+        entry = {
+          taskId: task.id,
+          content: step.step,
+          status: step.status,
+          done: false,
+          sessionId,
+          projectId: project.id,
+        };
+        state.planMap[key] = entry;
+        created += 1;
+      }
+    }
+
+    if (entry && entry.deletedAt && !wantsDone) {
+      entry.done = true;
+      entry.status = "completed";
+      entry.updatedAt = Date.now();
+      continue;
     }
 
     entry.content = step.step;
-    entry.status = step.status;
+    entry.status = wantsDone ? "completed" : step.status;
     entry.sessionId = sessionId;
     entry.projectId = project.id;
     entry.updatedAt = Date.now();
 
-    const task = state.localTasks.find((item) => String(item.id) === String(entry.taskId));
-    if (task && wantsDone && !task.completed) {
-      task.completed = true;
-      task.completedAt = Date.now();
+    if (wantsDone && !entry.deletedAt) {
+      const task = state.localTasks.find((item) => String(item.id) === String(entry.taskId));
+      if (task) removeLocalTask(state, task.id);
+      entry.done = true;
+      entry.deletedAt = Date.now();
+      entry.deletedReason = "completed";
       completed += 1;
     }
-    if (task) entry.done = task.completed;
   }
 
   const record = {
@@ -730,6 +855,7 @@ export async function syncPlan({ steps, sessionId = "default", turnId = null, so
     total: normalized.length,
     created,
     completed,
+    autoDeleted: completed,
     reopened: 0,
     mode: "local",
   };

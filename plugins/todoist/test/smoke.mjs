@@ -194,26 +194,47 @@ const plan = [
   { step: "步骤 C", status: "completed" },
 ];
 const sync1 = await tool("todoist_sync_plan", { steps: plan, session_id: "test" });
-assert.equal(sync1.structuredContent.created, 3);
+assert.equal(sync1.structuredContent.created, 2, "completed steps must not create visible tasks");
+assert.equal(sync1.structuredContent.completed, 1);
 console.log("PASS sync plan");
 
 let board = (await tool("todoist_board_data")).structuredContent;
 assert.equal(board.stats.total, 3);
 assert.equal(board.stats.completed, 1);
 assert.equal(board.stats.active, 2);
+assert.equal(board.stats.archivedCompleted, 1);
+assert.equal(board.tasks.length, 2, "completed plan step should be removed from visible tasks");
+assert.ok(!board.tasks.some((item) => item.content === "步骤 C"), "completed step C must be removed");
 assert.equal(board.config.mode, "local");
+assert.equal(board.config.autoDeleteCompleted, true);
 assert.ok(board.sessionLabels && typeof board.sessionLabels === "object", "session labels map missing");
 
 const taskB = board.tasks.find((item) => item.content === "步骤 B");
-await tool("todoist_complete_task", { task_id: taskB.id });
+const completedB = await tool("todoist_complete_task", { task_id: taskB.id });
+assert.equal(completedB.structuredContent.autoDeleted, true);
 board = (await tool("todoist_board_data")).structuredContent;
 assert.equal(board.stats.completed, 2);
+assert.equal(board.stats.archivedCompleted, 2);
+assert.equal(board.tasks.length, 1);
+assert.ok(!board.tasks.some((item) => item.content === "步骤 B"), "completed step B must be removed");
 
-const taskC = board.tasks.find((item) => item.content === "步骤 C");
-await tool("todoist_reopen_task", { task_id: taskC.id });
+const syncAgain = await tool("todoist_sync_plan", { steps: plan, session_id: "test" });
+assert.equal(syncAgain.structuredContent.created, 0, "completed steps must not be recreated");
 board = (await tool("todoist_board_data")).structuredContent;
-assert.equal(board.stats.completed, 1);
-console.log("PASS complete/reopen");
+assert.equal(board.stats.archivedCompleted, 2);
+assert.equal(board.tasks.length, 1, "repeat sync must keep completed tasks removed");
+
+const manualKeep = await tool("todoist_add_task", { content: "手动完成后保留" });
+const manualDone = await tool("todoist_complete_task", { task_id: manualKeep.structuredContent.id });
+assert.equal(manualDone.structuredContent.autoDeleted, false);
+board = (await tool("todoist_board_data")).structuredContent;
+const keptManual = board.tasks.find((item) => item.id === manualKeep.structuredContent.id);
+assert.ok(keptManual && keptManual.checked, "manual task must stay visible after completion");
+await tool("todoist_reopen_task", { task_id: manualKeep.structuredContent.id });
+await tool("todoist_delete_task", { task_id: manualKeep.structuredContent.id });
+board = (await tool("todoist_board_data")).structuredContent;
+assert.equal(board.stats.completed, 2);
+console.log("PASS complete auto-delete/reopen manual");
 
 assert.ok(Array.isArray(board.projects) && board.projects.length >= 1);
 assert.ok(board.activeProjectId);

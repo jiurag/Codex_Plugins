@@ -1,6 +1,6 @@
 ---
 name: todoist
-description: 把 Codex 的计划步骤同步成 Todoist 任务，并在侧边栏任务清单里查看完成情况。用户提到待办、任务清单、Todoist、/plan 同步、哪些做完了时使用。
+description: 把 Codex 的计划步骤同步成 Todoist 任务；步骤完成后自动移出清单。用户提到待办、任务清单、Todoist、/plan 同步、哪些做完了时使用。
 ---
 
 # Todoist
@@ -31,7 +31,7 @@ description: 把 Codex 的计划步骤同步成 Todoist 任务，并在侧边栏
 规则：
 
 1. 同一会话里，同样的步骤文字重复同步不会重复建任务。
-2. **每完成一个步骤就立即回写状态**：不要等全部结束、不要等用户提醒。重新调用 `todoist_sync_plan`，传完整步骤列表；刚完成的步骤设为 `completed`，当前步骤设为 `inProgress`，后面的步骤保持 `pending`。插件会自动勾掉完成项。
+2. **每完成一个步骤就立即回写状态**：不要等全部结束、不要等用户提醒。重新调用 `todoist_sync_plan`，传完整步骤列表；刚完成的步骤设为 `completed`，当前步骤设为 `inProgress`，后面的步骤保持 `pending`。插件会把完成的步骤自动移出清单，并保留防重复记录。
 3. 不要一次建一堆模糊的大任务，尽量拆成能勾掉的小步骤。
 4. 如果计划有变化，重新调用一次完整步骤列表，不要只传新增的。
 5. 多会话场景下优先用 `todoist_sync_plan` 并传当前 `session_id`；`todoist_sync_last_plan` 默认同步最新一份计划，传 `session_id` 才同步指定会话。
@@ -41,11 +41,11 @@ description: 把 Codex 的计划步骤同步成 Todoist 任务，并在侧边栏
 ## 查看清单
 
 调用 `todoist_board_data`，返回 `tasks`、`stats`、`config`、`lastPlan`。
-回答用户时优先用 `stats.completed / stats.total` 和未完成任务列表。
+回答用户时优先用 `stats.completed / stats.total`、`stats.archivedCompleted` 和未完成任务列表。计划步骤完成后会从任务列表中移除，但 `stats.archivedCompleted` 仍会累计已完成数量。
 
 ## 打开面板
 
-调用 `todoist_open_board`。面板会出现在 Codex 侧边栏或对话侧栏，支持勾选、添加任务、编辑内容/截止日期/优先级、删除任务、同步最近计划。
+调用 `todoist_open_board`。面板会出现在 Codex 侧边栏或对话侧栏，支持勾选、添加任务、编辑内容/截止日期/优先级、删除任务、同步最近计划。计划任务勾选后会播放退场动画并从清单移除；手动任务勾选后仍保留，方便用户自己管理。
 
 ## 本地模式
 
