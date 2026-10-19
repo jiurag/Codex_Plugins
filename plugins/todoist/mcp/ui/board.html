@@ -465,7 +465,7 @@
     function notify(method, params) { window.parent.postMessage({ jsonrpc: "2.0", method, params }, "*"); }
     async function connect() {
       if (window.parent === window) throw new Error("not-embedded");
-      const params = { appCapabilities: { availableDisplayModes: ["inline", "fullscreen"] }, appInfo: { name: "Todoist", version: "0.9.0" }, protocolVersion: "2026-01-26" };
+      const params = { appCapabilities: { availableDisplayModes: ["inline", "fullscreen"] }, appInfo: { name: "Todoist", version: "0.9.1" }, protocolVersion: "2026-01-26" };
       let result;
       try { result = await request("ui/initialize", params, 4000); } catch { result = await request("ui/initialize", params, 4000); }
       notify("ui/notifications/initialized", {});
@@ -504,7 +504,7 @@
     if (state.liveSource) return;
     try {
       const source = new EventSource(`http://127.0.0.1:${LIVE_CONFIG.port}/events/${LIVE_CONFIG.token}`);
-      state.liveSource = source; source.onopen = () => setLive(true); source.onerror = () => setLive(false); source.addEventListener("changed", () => load(true));
+      state.liveSource = source; source.onopen = () => setLive(true); source.onerror = () => setLive(false); source.addEventListener("changed", () => { if (!state.busy) load(true); });
     } catch { setLive(false); }
   }
   function setAmbient(data) {
@@ -675,7 +675,7 @@
     catch (error) { toast(error instanceof Error ? error.message : "读取失败", "error"); }
   }
   async function checkRevision() {
-    if (!state.connected || document.hidden) return;
+    if (!state.connected || document.hidden || state.busy) return;
     try { const result = await bridge.callTool("todoist_board_version", {}); const data = unwrap(result); if (data && Number(data.version) !== state.revision) await load(true); } catch {}
   }
   async function toggleTask(task) {
