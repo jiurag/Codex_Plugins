@@ -465,7 +465,7 @@
     function notify(method, params) { window.parent.postMessage({ jsonrpc: "2.0", method, params }, "*"); }
     async function connect() {
       if (window.parent === window) throw new Error("not-embedded");
-      const params = { appCapabilities: { availableDisplayModes: ["inline", "fullscreen"] }, appInfo: { name: "Todoist", version: "0.9.1" }, protocolVersion: "2026-01-26" };
+      const params = { appCapabilities: { availableDisplayModes: ["inline", "fullscreen"] }, appInfo: { name: "Todoist", version: "0.9.2" }, protocolVersion: "2026-01-26" };
       let result;
       try { result = await request("ui/initialize", params, 4000); } catch { result = await request("ui/initialize", params, 4000); }
       notify("ui/notifications/initialized", {});
@@ -770,13 +770,11 @@
       demo: true, revision: 3, activeProjectId: "demo-project",
       projects: [{ id: "demo-project", name: "Flow 任务", isInbox: false }],
       tasks: [
-        { id: "demo-1", content: "梳理 Todoist 同步规则", checked: true, source: "plan", planStatus: "completed", sessionId: "demo", projectId: "demo-project", labels: ["同步"], due: "", dueDate: "", priority: 4, order: 1 },
-        { id: "demo-2", content: "把 Codex 计划步骤自动建成任务", checked: true, source: "plan", planStatus: "completed", sessionId: "demo", projectId: "demo-project", labels: ["同步"], due: "", dueDate: "", priority: 4, order: 2 },
         { id: "demo-3", content: "在侧边栏展示完成进度", checked: false, source: "plan", planStatus: "inProgress", sessionId: "demo", projectId: "demo-project", labels: ["界面"], due: "今天", dueDate: new Date().toISOString().slice(0,10), priority: 2, order: 3 },
         { id: "demo-4", content: "补上 Token 配置和错误提示", checked: false, source: "manual", planStatus: "pending", sessionId: "demo", projectId: "demo-project", labels: ["配置"], due: "", dueDate: "", priority: 3, order: 4 },
         { id: "demo-5", content: "验证真实 Todoist 账号读写", checked: false, source: "manual", planStatus: "pending", sessionId: "demo", projectId: "demo-project", labels: [], due: "", dueDate: "", priority: 4, order: 5 }
       ],
-      stats: { total: 5, completed: 2, active: 3, archivedCompleted: 0, percent: 40 },
+      stats: { total: 5, completed: 2, active: 3, archivedCompleted: 2, percent: 40 },
       lastPlans: { demo: { steps: [{ step: "梳理 Todoist 同步规则", status: "completed" }, { step: "把 Codex 计划步骤自动建成任务", status: "completed" }, { step: "在侧边栏展示完成进度", status: "pending" }], updatedAt: Date.now() } },
       lastPlan: { sessionId: "demo", steps: [{ step: "梳理 Todoist 同步规则", status: "completed" }], updatedAt: Date.now() },
       sessionLabels: { demo: "Todoist 面板重设计" },
