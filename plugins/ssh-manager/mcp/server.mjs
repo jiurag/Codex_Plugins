@@ -61,7 +61,7 @@ import {
 } from "./lib/ssh.mjs";
 
 const SERVER_NAME = "Codex SSH 管理器";
-const SERVER_VERSION = "0.3.2";
+const SERVER_VERSION = "0.3.4";
 const ELICITATION_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_MESSAGE_LENGTH = 20_000;
 // Codex 的 elicitation 面板高度 = message 换行后的行数 + 选项区高度
@@ -80,6 +80,112 @@ const JsonRpcError = {
 
 let nextRequestId = 1;
 const pendingRequests = new Map();
+
+// ---- 客户端信息与 elicitation 兼容层 ----
+// Codex 各版本接受的 elicitation 形态不一致：
+//   * 标准 MCP（2025-11-25）：mode = "form"
+//   * 桌面版历史命名：mode = "openai/form" / "openaiForm"
+// 客户端不认识某个 mode 时，常见表现不是报错，而是几十毫秒内直接回 decline。
+// 因此这里按顺序尝试，并缓存成功过的那一种，后续请求直接复用。
+const ELICITATION_MODES = ["form", "openai/form", "openaiForm"];
+const ELICITATION_AUTO_DECLINE_MS = Math.max(
+  100,
+  Number.parseInt(process.env.SSH_MANAGER_ELICITATION_AUTO_DECLINE_MS || "700", 10) || 700,
+);
+let clientInfo = { name: null, version: null };
+let clientCapabilities = {};
+let negotiatedProtocolVersion = null;
+let preferredElicitationMode = null;
+const recentElicitationAttempts = [];
+
+function rememberElicitationAttempt(entry) {
+  recentElicitationAttempts.push({ at: new Date().toISOString(), ...entry });
+  while (recentElicitationAttempts.length > 20) {
+    recentElicitationAttempts.shift();
+  }
+  // 成功是常态，不写日志避免刷屏；失败/被拒才记录，便于排查兼容性。
+  if (entry.action === "accept") {
+    return;
+  }
+  try {
+    appendLog({ kind: "elicitation", name: "elicitation", ...entry });
+  } catch {
+    // 日志失败不影响主流程
+  }
+}
+
+function buildElicitationParams(mode, { message, schema }) {
+  const params = { mode, message, requestedSchema: schema };
+  // openai/form 系列要求 schema 同时出现在 _meta 里，部分客户端只认这一份。
+  if (mode !== "form") {
+    params._meta = { "openai/elicitation": { requestedSchema: schema } };
+  }
+  return params;
+}
+
+async function requestElicitation({ message, schema }) {
+  const order = preferredElicitationMode
+    ? [preferredElicitationMode, ...ELICITATION_MODES.filter((mode) => mode !== preferredElicitationMode)]
+    : ELICITATION_MODES.slice();
+  const attempts = [];
+  let lastDecline = null;
+  let lastError = null;
+  for (const mode of order) {
+    const startedAt = Date.now();
+    try {
+      const result = await request("elicitation/create", buildElicitationParams(mode, { message, schema }));
+      const elapsedMs = Date.now() - startedAt;
+      const action = result?.action || "unknown";
+      attempts.push({ mode, action, elapsedMs });
+      rememberElicitationAttempt({
+        mode,
+        action,
+        elapsedMs,
+        clientVersion: clientInfo.version || null,
+        protocolVersion: negotiatedProtocolVersion,
+      });
+      if (action === "accept") {
+        preferredElicitationMode = mode;
+        return { action, content: result?.content || {}, mode, elapsedMs, attempts };
+      }
+      lastDecline = { action, mode, elapsedMs };
+      // 秒拒更像是"客户端不认识这个 mode"，而不是用户在几百毫秒内点了拒绝。
+      if (elapsedMs >= ELICITATION_AUTO_DECLINE_MS) {
+        return { action, content: {}, mode, elapsedMs, attempts, userDecided: true };
+      }
+    } catch (error) {
+      const elapsedMs = Date.now() - startedAt;
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      attempts.push({ mode, action: "error", elapsedMs, error: errorMessage });
+      rememberElicitationAttempt({
+        mode,
+        action: "error",
+        elapsedMs,
+        error: errorMessage,
+        clientVersion: clientInfo.version || null,
+        protocolVersion: negotiatedProtocolVersion,
+      });
+      lastError = error;
+    }
+  }
+  return {
+    action: "unavailable",
+    content: {},
+    attempts,
+    decline: lastDecline,
+    error: lastError ? String(lastError.message || lastError) : null,
+  };
+}
+
+function describeClient() {
+  return {
+    client: clientInfo.name ? String(clientInfo.name + " " + (clientInfo.version || "")).trim() : "未知客户端",
+    protocolVersion: negotiatedProtocolVersion,
+    capabilities: clientCapabilities,
+    preferredElicitationMode,
+    recentAttempts: recentElicitationAttempts.slice(-5),
+  };
+}
 
 const APPROVAL_MODES = {
   DEFAULT: "默认执行",
@@ -447,6 +553,11 @@ function displayTextFor(payload) {
   const port = profile.port || 22;
   const target = displayTarget(profile);
 
+  if (payload.status === "确认界面不可用" || payload.status === "需要表单") {
+    return `${action || "操作"}：未执行（确认表单不可用）
+${payload.message || payload.reason || ""}`;
+  }
+
   if (payload.status === "已拒绝" || payload.status === "已阻止") {
     const detailText = payload.message || payload.reason || payload.status || "未执行";
     return `${action || "操作"}：未执行\n${detailText}`;
@@ -736,48 +847,43 @@ async function execWithFallback(profile, command, options) {
 }
 
 async function askApproval({ title, message, details }) {
-  let result;
-  try {
-    result = await request("elicitation/create", {
-      mode: "form",
-      message: clampApprovalMessage(`${message}\n\n${details}`),
-      requestedSchema: {
-        type: "object",
-        properties: {
-          decision: {
-            type: "string",
-            title,
-            oneOf: [
-              {
-                const: "confirm",
-                title: "确认本次执行",
-              },
-              {
-                const: "confirm_and_auto",
-                title: "确认并开启本次会话免询问",
-              },
-            ],
-            default: "confirm",
-          },
+  // 只使用 MCP 规范里的 enum / enumNames：oneOf + const 不在 ElicitationSchema 子集内，
+  // 新版客户端做 schema 校验时会直接拒绝整份表单。
+  const outcome = await requestElicitation({
+    message: clampApprovalMessage(`${message}\n\n${details}`),
+    schema: {
+      type: "object",
+      properties: {
+        decision: {
+          type: "string",
+          title,
+          enum: ["confirm", "confirm_and_auto"],
+          enumNames: ["确认本次执行", "确认并开启本次会话免询问"],
+          default: "confirm",
         },
-        required: ["decision"],
       },
-    });
-  } catch (error) {
+      required: ["decision"],
+    },
+  });
+
+  if (outcome.action === "unavailable") {
     return {
       approved: false,
       reason: "确认界面不可用",
-      error: error instanceof Error ? error.message : String(error),
+      failureKind: "确认界面不可用",
+      error: outcome.error || "客户端没有接受任何一种 elicitation 模式",
+      attempts: outcome.attempts,
+      mode: null,
     };
   }
-
-  if (result?.action !== "accept") {
+  if (outcome.action !== "accept") {
     return {
       approved: false,
-      reason: `确认_${result?.action === "decline" ? "已拒绝" : "已取消"}`,
+      reason: `确认_${outcome.action === "decline" ? "已拒绝" : "已取消"}`,
+      mode: outcome.mode,
     };
   }
-  const decision = result?.content?.decision;
+  const decision = outcome.content?.decision;
   if (decision === "confirm_and_auto") {
     approvalMode = APPROVAL_MODES.SESSION_AUTO;
     persistApprovalMode(APPROVAL_MODES.SESSION_AUTO);
@@ -785,27 +891,40 @@ async function askApproval({ title, message, details }) {
       approved: true,
       reason: "已确认并开启会话免询问",
       sessionAutoEnabled: true,
+      mode: outcome.mode,
     };
   }
   if (decision === "confirm") {
-    return { approved: true, reason: "本次已确认" };
+    return { approved: true, reason: "本次已确认", mode: outcome.mode };
   }
-  return { approved: false, reason: "未确认" };
+  return { approved: false, reason: "未确认", mode: outcome.mode };
 }
-
 function approvalDenied(approval, action) {
+  if (approval.failureKind === "确认界面不可用") {
+    return {
+      status: "确认界面不可用",
+      action,
+      approved: false,
+      reason: approval.reason,
+      failureKind: "确认界面不可用",
+      error: approval.error,
+      elicitationAttempts: approval.attempts,
+      message:
+        "Codex 客户端没有打开确认表单（已依次尝试 form / openai/form / openaiForm 三种模式），操作未执行。\n" +
+        "处理办法：\n" +
+        "1) 把 Codex 桌面版更新到最新版，然后新开一个任务重试；\n" +
+        "2) 仍不行时调用 ssh_elicitation_diagnose 查看客户端返回，并把结果发给插件作者；\n" +
+        "3) 临时绕过：由用户在对话中明确授权后，调用 ssh_set_approval_mode 切到「会话免确认」，执行完再切回「默认执行」。",
+    };
+  }
   return {
     status: "已拒绝",
     action,
     approved: false,
     reason: approval.reason,
-    message:
-      approval.reason === "确认界面不可用"
-        ? "Codex 确认界面不可用，操作未执行。"
-        : "用户未同意该操作，操作未执行。",
+    message: "用户未同意该操作，操作未执行。",
   };
 }
-
 function profileSummary(profile) {
   return `${profile.alias} (${profile.username}@${profile.host}:${profile.port})`;
 }
@@ -1036,18 +1155,70 @@ async function handleProfileUpsert(args) {
     }
   }
 
-  const result = await request("elicitation/create", {
-    mode: "form",
-    message: existing
-      ? `更新 SSH 服务器配置：${existing.alias}。请在 Codex 表单中确认或修改字段。`
-      : "新增 SSH 服务器配置。请在 Codex 表单中填写字段；密码不会进入聊天或模型上下文。",
-    requestedSchema: profileUpsertSchema(existing, args),
-  });
-
-  if (result?.action !== "accept") {
-    return { status: "已拒绝", action: "配置添加或更新", approved: false, reason: result?.action === "decline" ? "已拒绝" : "已取消" };
+  // 表单不可用时，允许走"参数直填"的降级路径；密码永远不接受聊天明文。
+  const noForm = args.noForm === true || args.noForm === "true";
+  let content;
+  if (noForm) {
+    if (args.userConfirmed !== true && args.userConfirmed !== "true") {
+      throw new ToolInputError("noForm 降级路径必须带 userConfirmed=true，表示用户已在对话中明确同意。");
+    }
+    const fallbackAuth = String(args.authMethod || "").trim();
+    if (!/^(私钥|密钥|key)$/i.test(fallbackAuth)) {
+      return {
+        status: "需要表单",
+        action: "配置添加或更新",
+        approved: false,
+        failureKind: "确认界面不可用",
+        message:
+          "noForm 降级只支持私钥认证（密码必须通过表单输入，不能出现在聊天里）。" +
+          "请改用 authMethod=私钥 + privateKeyPath 重试，或修复客户端表单后再试。",
+      };
+    }
+    content = {
+      approve: true,
+      alias: args.alias || existing?.alias || "",
+      host: args.host || existing?.host || "",
+      port: args.port || existing?.port || 22,
+      username: args.username || existing?.username || "",
+      authMethod: "私钥",
+      privateKeyPath: args.privateKeyPath || existing?.privateKeyPath || "",
+      privateKeyPassphrase: "",
+      defaultRemoteDir: args.defaultRemoteDir || existing?.defaultRemoteDir || "",
+      hostKeyPolicy: args.hostKeyPolicy || existing?.hostKeyPolicy || "首次连接自动接受",
+      description: args.description || existing?.description || "",
+      preferKeyAuth: false,
+    };
+  } else {
+    const elicitation = await requestElicitation({
+      message: existing
+        ? `更新 SSH 服务器配置：${existing.alias}。请在 Codex 表单中确认或修改字段。`
+        : "新增 SSH 服务器配置。请在 Codex 表单中填写字段；密码不会进入聊天或模型上下文。",
+      schema: profileUpsertSchema(existing, args),
+    });
+    if (elicitation.action === "unavailable") {
+      return {
+        status: "确认界面不可用",
+        action: "配置添加或更新",
+        approved: false,
+        failureKind: "确认界面不可用",
+        error: elicitation.error,
+        elicitationAttempts: elicitation.attempts,
+        message:
+          "Codex 客户端没有打开填写表单（已依次尝试 form / openai/form / openaiForm）。\n" +
+          "如果这台服务器用私钥认证，可以不经过表单直接添加：用同样的参数再加 noForm=true 和 userConfirmed=true 调用一次" +
+          "（authMethod=私钥、privateKeyPath=本机私钥路径）。密码认证必须走表单，不能通过聊天传递。",
+      };
+    }
+    if (elicitation.action !== "accept") {
+      return {
+        status: "已拒绝",
+        action: "配置添加或更新",
+        approved: false,
+        reason: elicitation.action === "decline" ? "已拒绝" : "已取消",
+      };
+    }
+    content = elicitation.content || {};
   }
-  const content = result.content || {};
   if (!isTrue(content.approve)) {
     return { status: "已拒绝", action: "配置添加或更新", approved: false, reason: "未确认" };
   }
@@ -1863,6 +2034,57 @@ function formatToolError(error) {
   return message;
 }
 
+async function handleElicitationDiagnose(args) {
+  const requested = String(args.mode || "").trim();
+  const modes = requested ? [requested] : ELICITATION_MODES.slice();
+  const timeoutSeconds = Math.min(120, Math.max(3, Number.parseInt(args.timeoutSeconds || 20, 10) || 20));
+  const results = [];
+  for (const mode of modes) {
+    const startedAt = Date.now();
+    try {
+      const result = await request(
+        "elicitation/create",
+        buildElicitationParams(mode, {
+          message: "SSH 管理插件的表单自检：看到这个表单就说明该模式可用，请勾选后提交。",
+          schema: {
+            type: "object",
+            properties: {
+              ok: { type: "boolean", title: "表单能正常显示吗？", default: true },
+            },
+            required: ["ok"],
+          },
+        }),
+        timeoutSeconds * 1000,
+      );
+      results.push({ mode, action: result?.action || "unknown", elapsedMs: Date.now() - startedAt });
+    } catch (error) {
+      results.push({
+        mode,
+        action: "error",
+        elapsedMs: Date.now() - startedAt,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    rememberElicitationAttempt({
+      ...results[results.length - 1],
+      clientVersion: clientInfo.version || null,
+      protocolVersion: negotiatedProtocolVersion,
+    });
+  }
+  const working = results.filter((result) => result.action === "accept").map((result) => result.mode);
+  return {
+    status: "正常",
+    action: "确认表单自检",
+    ...describeClient(),
+    results,
+    workingModes: working,
+    conclusion:
+      working.length > 0
+        ? `可用模式：${working.join("、")}；插件会自动使用它。`
+        : "三种模式都没有成功。说明当前客户端确实不弹表单；请把 results 发给插件作者，或先切到「会话免确认」临时绕过。",
+  };
+}
+
 async function handleToolCall(id, params) {
   const name = params?.name;
   const args = params?.arguments && typeof params.arguments === "object" ? params.arguments : {};
@@ -1898,6 +2120,8 @@ async function handleToolCall(id, params) {
       }
       case "ssh_profile_upsert":
         return toolResult(id, await handleProfileUpsert(args));
+      case "ssh_elicitation_diagnose":
+        return toolResult(id, await handleElicitationDiagnose(args));
       case "ssh_profile_remove":
         return toolResult(id, await handleProfileRemove(args));
       case "ssh_session_open":
@@ -2177,6 +2401,14 @@ const TOOLS = [
         defaultRemoteDir: { type: "string", description: "可选的默认远程目录。" },
         hostKeyPolicy: { type: "string", enum: ["首次连接自动接受", "严格校验", "不校验（不安全）"], description: "可选的主机指纹策略默认值。" },
         description: { type: "string", description: "可选的备注。" },
+        noForm: {
+          type: "boolean",
+          description: "确认表单不可用时的降级路径：不经表单直接写入配置。仅支持私钥认证，密码必须走表单。",
+        },
+        userConfirmed: {
+          type: "boolean",
+          description: "noForm 时必须为 true，表示用户已在对话中明确同意写入这条配置。",
+        },
       },
       required: ["alias"],
     },
@@ -2286,11 +2518,54 @@ const TOOLS = [
     },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   },
+  {
+    name: "ssh_elicitation_diagnose",
+    title: "诊断确认表单是否可用",
+    description:
+      "只读诊断：检查当前 Codex 客户端是否支持确认表单，并依次尝试 form / openai/form / openaiForm 三种模式。会弹出最多 3 个无害的确认框。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        mode: {
+          type: "string",
+          enum: ["form", "openai/form", "openaiForm"],
+          description: "只测试某一种模式；留空则三种都测。",
+        },
+        timeoutSeconds: {
+          type: "integer",
+          minimum: 3,
+          maximum: 120,
+          description: "每种模式等待多久，默认 20 秒。",
+        },
+      },
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
 ];
+
 async function handleRequest(message) {
   const { id, method, params } = message;
 
   if (method === "initialize") {
+    clientInfo = {
+      name: params?.clientInfo?.name || null,
+      version: params?.clientInfo?.version || null,
+    };
+    clientCapabilities =
+      params?.capabilities && typeof params.capabilities === "object" ? params.capabilities : {};
+    negotiatedProtocolVersion = params?.protocolVersion || null;
+    try {
+      appendLog({
+        kind: "init",
+        client: clientInfo.name,
+        clientVersion: clientInfo.version,
+        protocolVersion: negotiatedProtocolVersion,
+        capabilities: clientCapabilities,
+        serverVersion: SERVER_VERSION,
+      });
+    } catch {
+      // 日志失败不影响初始化
+    }
     sendResult(id, {
       protocolVersion: params?.protocolVersion || "2025-11-25",
       capabilities: { tools: {} },

@@ -515,8 +515,49 @@ async function main() {
   assert.ok(oldLogs._meta.returned > fullLogs._meta.returned - 1, "极早的 since 应返回全部");
 
 
-  client.close();
-  await waitForExit(child);
+  // ===== 确认表单模式兼容（新版客户端只认某一种 mode）=====
+  // 模拟：客户端不认识 form，几十毫秒内直接 decline；openai/form 才真正弹表单。
+  const modeSequence = [];
+  client.onElicitation = async (params) => {
+    modeSequence.push(params.mode);
+    if (params.mode === "form") {
+      return { action: "decline" };
+    }
+    if (params.requestedSchema?.properties?.decision) {
+      return { action: "accept", content: { decision: "confirm" } };
+    }
+    return { action: "accept", content: { ok: true } };
+  };
+  const viaFallback = await client.tool("ssh_exec", {
+    alias: "测试服务器",
+    command: "systemctl restart fallback-service",
+    purpose: "验证 mode 自动回退",
+  });
+  assert.equal(viaFallback._meta.status, "已执行", "form 被秒拒后应自动改用 openai/form");
+  assert.deepEqual(modeSequence, ["form", "openai/form"], "应按顺序回退到 openai/form");
+
+  // 模拟：三种模式全部不可用 -> 必须明确报"确认界面不可用"，而不是"用户已拒绝"。
+  const failSequence = [];
+  client.onElicitation = async (params) => {
+    failSequence.push(params.mode);
+    return { action: "decline" };
+  };
+  const unavailable = await client.tool("ssh_exec", {
+    alias: "测试服务器",
+    command: "systemctl restart should-not-run",
+    purpose: "验证全部模式不可用",
+  });
+  assert.equal(unavailable._meta.status, "确认界面不可用", "全部模式不可用时应明确报告");
+  assert.deepEqual(failSequence, ["openai/form", "form", "openaiForm"], "失败模式应被排除后按顺序重试");
+
+  // 诊断工具：应返回每种模式的结果
+  const diagnose = await client.tool("ssh_elicitation_diagnose", { mode: "form", timeoutSeconds: 3 });
+  assert.equal(diagnose._meta.status, "正常");
+  assert.equal(diagnose._meta.results.length, 1);
+  assert.equal(diagnose._meta.results[0].mode, "form");
+  assert.equal(diagnose._meta.results[0].action, "decline");
+
+  client.close();  await waitForExit(child);
   assert.equal(stderr, "", `server stderr should be empty: ${stderr}`);
   fs.rmSync(tempRoot, { recursive: true, force: true });
 

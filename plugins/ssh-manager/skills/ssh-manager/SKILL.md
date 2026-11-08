@@ -94,6 +94,7 @@ description: 管理已保存的 SSH 服务器，使用本地加密凭据执行�
 - `ssh_session_register`：为当前任务注册可切换的 SSH 操作会话。
 - `ssh_set_approval_mode`：切换本次会话的操作模式。
 - `ssh_operation_dashboard`：打开、查看或停止 SSH 实时操作面板。
+- `ssh_elicitation_diagnose`：只读诊断确认表单是否可用。会依次尝试 `form` / `openai/form` / `openaiForm` 三种模式，返回每种模式的结果。表单打不开时先用它取证。
 - `ssh_log_read`：读取本地操作日志。日志为 JSONL，已自动脱敏，包含每次调用的参数、耗时、结果、失败类型和原始 stdout/stderr。排查失败时优先用它。
 - `ssh_terminal_open`：打开持续连接的交互式 SSH 终端。
 - `ssh_terminal_write`：向交互式 SSH 终端发送输入。
@@ -183,6 +184,18 @@ ssh_profile_list -> 选择别名 -> ssh_exec 执行单条只读命令
 实时面板也提供交互式终端区域：选择服务器、点击连接、输入命令即可。
 
 该终端是基于行输入的持续 SSH shell，适合 `cd`、环境变量、连续命令。全屏程序（例如 `vim`、`top`）可能无法完整渲染。
+
+## 确认表单打不开时
+
+新版 Codex 客户端对 elicitation 的 `mode` 支持不一致，插件已内置自动回退：`form` → `openai/form` → `openaiForm`，并把成功过的模式记住。
+
+如果工具返回 `status: "确认界面不可用"`，说明三种模式都没弹出来。此时：
+
+1. 先调用 `ssh_elicitation_diagnose`，把 `results` 原样告诉用户（这是取证，不要自己下结论）。
+2. 提醒用户把 Codex 桌面版更新到最新版，并**新开一个任务**重试（MCP 进程按任务启动，旧任务不会自动换新代码）。
+3. 如果用户只是要添加一台**私钥认证**的服务器，可以用降级路径：调用 `ssh_profile_upsert`，传 `noForm: true`、`userConfirmed: true`、`authMethod: 私钥`、`privateKeyPath: <本机私钥绝对路径>`。必须在调用前把要写入的字段逐条念给用户并拿到明确同意；`userConfirmed` 只能由用户授权后置为 true。
+4. 密码认证**没有**降级路径：密码只能通过表单输入，绝不能出现在聊天或工具参数里。
+5. 需要临时执行敏感操作时，只有在用户明确说“开启会话免确认”之后，才能调用 `ssh_set_approval_mode` 切到「会话免确认」；执行完立刻切回「默认执行」。
 
 ## 安全说明
 

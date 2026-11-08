@@ -15,3 +15,5 @@ vault.key
 known_hosts
 
 node_modules/
+# 临时提交信息文件
+.commitmsg.txt
