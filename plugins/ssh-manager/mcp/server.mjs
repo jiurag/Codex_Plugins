@@ -61,7 +61,7 @@ import {
 } from "./lib/ssh.mjs";
 
 const SERVER_NAME = "Codex SSH 管理器";
-const SERVER_VERSION = "0.3.4";
+const SERVER_VERSION = "0.3.5";
 const ELICITATION_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_MESSAGE_LENGTH = 20_000;
 // Codex 的 elicitation 面板高度 = message 换行后的行数 + 选项区高度
@@ -912,8 +912,9 @@ function approvalDenied(approval, action) {
       message:
         "Codex 客户端没有打开确认表单（已依次尝试 form / openai/form / openaiForm 三种模式），操作未执行。\n" +
         "处理办法：\n" +
-        "1) 把 Codex 桌面版更新到最新版，然后新开一个任务重试；\n" +
-        "2) 仍不行时调用 ssh_elicitation_diagnose 查看客户端返回，并把结果发给插件作者；\n" +
+        "最常见原因：客户端权限模式是「完全访问 / 从不询问」（approval_policy=never）；这种模式下所有「要问用户」的请求都会被内核立刻拒绝，界面根本不会出现。\n" +
+        "1) 先把输入框旁的权限选择器从「完全访问」切到会询问的档位（工作区 / 只读），再重试；\n" +
+        "2) 仍不行时调用 ssh_elicitation_diagnose 查看三种模式的实际返回；\n" +
         "3) 临时绕过：由用户在对话中明确授权后，调用 ssh_set_approval_mode 切到「会话免确认」，执行完再切回「默认执行」。",
     };
   }
@@ -1205,7 +1206,9 @@ async function handleProfileUpsert(args) {
         elicitationAttempts: elicitation.attempts,
         message:
           "Codex 客户端没有打开填写表单（已依次尝试 form / openai/form / openaiForm）。\n" +
-          "如果这台服务器用私钥认证，可以不经过表单直接添加：用同样的参数再加 noForm=true 和 userConfirmed=true 调用一次" +
+          "最常见原因：客户端权限模式是「完全访问 / 从不询问」（approval_policy=never），弹窗请求会被立刻拒绝。" +
+          "先在输入框旁的权限选择器里切到会询问的档位（工作区 / 只读），再重试。\n" +
+          "如果这台服务器用私钥认证，也可以不经过表单直接添加：用同样的参数再加 noForm=true 和 userConfirmed=true 调用一次" +
           "（authMethod=私钥、privateKeyPath=本机私钥路径）。密码认证必须走表单，不能通过聊天传递。",
       };
     }
@@ -2081,7 +2084,7 @@ async function handleElicitationDiagnose(args) {
     conclusion:
       working.length > 0
         ? `可用模式：${working.join("、")}；插件会自动使用它。`
-        : "三种模式都没有成功。说明当前客户端确实不弹表单；请把 results 发给插件作者，或先切到「会话免确认」临时绕过。",
+        : "三种模式都被立刻拒绝（毫秒级），说明客户端在弹窗之前就把请求挡掉了。最常见原因是权限模式为「完全访问 / 从不询问」（approval_policy=never）；先把权限切到会询问的档位再试，仍不行再把这三种结果发给插件作者。",
   };
 }
 
