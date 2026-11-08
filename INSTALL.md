@@ -32,7 +32,7 @@ codex plugin add todoist@jiura-plugins
 codex plugin list
 ```
 
-应看到 `ssh-manager@jiura-plugins  installed, enabled  0.3.3`。
+应看到 `ssh-manager@jiura-plugins  installed, enabled  0.3.6`。
 
 ### 4. 重新加载
 

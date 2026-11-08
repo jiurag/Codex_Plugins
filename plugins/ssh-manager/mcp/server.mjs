@@ -61,7 +61,7 @@ import {
 } from "./lib/ssh.mjs";
 
 const SERVER_NAME = "Codex SSH 管理器";
-const SERVER_VERSION = "0.3.5";
+const SERVER_VERSION = "0.3.6";
 const ELICITATION_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_MESSAGE_LENGTH = 20_000;
 // Codex 的 elicitation 面板高度 = message 换行后的行数 + 选项区高度
@@ -195,8 +195,14 @@ const APPROVAL_MODES = {
 let approvalMode = APPROVAL_MODES.DEFAULT;
 // "会话免确认"跨 MCP 进程重启的有效期。Codex 在 cwd/审批策略/权限变化时会重建 MCP 进程，
 // 之前该模式只存在内存里，于是"聊几轮又弹确认"。现在持久化到 vault，并只在窗口内恢复。
-const SESSION_AUTO_TTL_MS =
-  Math.max(1, Number.parseInt(process.env.SSH_MANAGER_SESSION_AUTO_TTL_MINUTES || "30", 10) || 30) * 60 * 1000;
+// 0 = 不过期（默认）：用户显式设置的免确认会一直保留，直到有人改成别的模式。
+// 如需自动过期，设置 SSH_MANAGER_SESSION_AUTO_TTL_MINUTES（分钟）。
+const SESSION_AUTO_TTL_MS = (function resolveSessionAutoTtlMs() {
+  const raw = process.env.SSH_MANAGER_SESSION_AUTO_TTL_MINUTES;
+  if (raw === undefined || String(raw).trim() === "") return 0;
+  const minutes = Number.parseInt(raw, 10);
+  return Number.isFinite(minutes) && minutes > 0 ? minutes * 60 * 1000 : 0;
+})();
 let sessionAutoRestoredAt = null;
 
 function persistApprovalMode(mode) {
@@ -217,16 +223,24 @@ function restoreApprovalMode() {
   try {
     const vault = readVault();
     const runtime = vault.runtime && typeof vault.runtime === "object" ? vault.runtime : {};
-    if (runtime.approvalMode !== APPROVAL_MODES.SESSION_AUTO) {
+    const persisted = String(runtime.approvalMode || "");
+    if (!Object.values(APPROVAL_MODES).includes(persisted)) {
+      return;
+    }
+    if (persisted === APPROVAL_MODES.DEFAULT) {
       return;
     }
     const updatedAt = Number(runtime.approvalModeUpdatedAt) || 0;
-    const age = Date.now() - updatedAt;
-    if (age < 0 || age > SESSION_AUTO_TTL_MS) {
-      return;
+    if (persisted === APPROVAL_MODES.SESSION_AUTO && SESSION_AUTO_TTL_MS > 0) {
+      const age = Date.now() - updatedAt;
+      if (age < 0 || age > SESSION_AUTO_TTL_MS) {
+        return;
+      }
     }
-    approvalMode = APPROVAL_MODES.SESSION_AUTO;
-    sessionAutoRestoredAt = updatedAt;
+    approvalMode = persisted;
+    if (persisted === APPROVAL_MODES.SESSION_AUTO) {
+      sessionAutoRestoredAt = updatedAt;
+    }
   } catch {
     // 读取失败就按默认模式处理。
   }
@@ -1465,7 +1479,7 @@ async function handleSetApprovalMode(args) {
     sessionAutoRestoredAt = null;
   }
   const description = mode === APPROVAL_MODES.SESSION_AUTO
-    ? "当前 MCP 会话内，敏感操作也不再询问，默认直接执行。"
+    ? "会话免确认 = root 级读写：不再弹确认、不做只读拦截，ssh_exec / upload / download / deploy / terminal 全部直接执行。该设置会持久化，直到显式改成别的模式。风险：任何经此插件的远程命令（含删除、覆盖、重启、改权限）都不会再询问你。"
     : mode === APPROVAL_MODES.READ_ONLY
       ? "仅允许只读命令；上传、下载、部署、删除和变更命令会被阻止。"
       : "只读命令无需询问；上传、下载、部署、删除和变更命令仍会询问。";
@@ -1486,6 +1500,8 @@ async function handleSetApprovalMode(args) {
     status: "已设置",
     mode,
     description,
+    rootReadWrite: mode === APPROVAL_MODES.SESSION_AUTO,
+    persistedUntilChanged: true,
   };
 }
 
@@ -2112,9 +2128,10 @@ async function handleToolCall(id, params) {
           approvalMode,
           sessionAutoTtlMinutes: Math.round(SESSION_AUTO_TTL_MS / 60000),
           sessionAutoRestored: sessionAutoRestoredAt ? new Date(sessionAutoRestoredAt).toISOString() : null,
-          sessionAutoExpiresAt: sessionAutoRestoredAt
-            ? new Date(sessionAutoRestoredAt + SESSION_AUTO_TTL_MS).toISOString()
-            : null,
+          sessionAutoExpiresAt:
+            sessionAutoRestoredAt && SESSION_AUTO_TTL_MS > 0
+              ? new Date(sessionAutoRestoredAt + SESSION_AUTO_TTL_MS).toISOString()
+              : null,
           dashboard: getDashboardStatus(),
           persistentSessions: getPersistentSessionStatus().length,
           persistentSftpSessions: getPersistentSftpStatus().length,
@@ -2374,7 +2391,7 @@ const TOOLS = [
   {
     name: "ssh_set_approval_mode",
     title: "设置 SSH 操作模式",
-    description: "设置当前 MCP 会话的操作模式。默认执行：只读免询问，敏感操作仍确认；只读免确认：仅执行只读，阻止变更；会话免确认：本次会话所有操作默认直接执行。",
+    description: "设置当前 MCP 会话的操作模式。默认执行：只读免询问，敏感操作仍确认；只读免确认：仅执行只读，阻止变更；会话免确认：root 级读写，所有操作直接执行且不做只读拦截，设置持久化直到显式改回。",
     inputSchema: {
       type: "object",
       properties: {
